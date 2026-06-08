@@ -156,7 +156,7 @@ fig.suptitle(f'Gapped uniform cadence: $N_\\mathrm{{total}}={N_total}$, '
              f'$N_\\mathrm{{survived}}={N_survived}$, '
              f'$T_\\mathrm{{cyc}}={T_cyc}$ s', fontsize=12)
 fig.tight_layout()
-plt.savefig('gapped_fft_vs_ls.pdf', bbox_inches='tight')
+
 plt.show()
 
 # ── terminal summary ───────────────────────────────────────────────────────────
