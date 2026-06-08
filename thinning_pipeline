@@ -1,0 +1,278 @@
+# -*- coding: utf-8 -*-
+"""
+Full AION-10 pipeline combining:
+  - GGN oscillator at f_sig
+  - ULDM signal
+  - Nightly shutdown
+  - Pseudo-random lift events (Poisson)
+  - Random MOT failures
+
+All parameters at the top.
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ══════════════════════════════════════════════════════════
+# PARAMETERS
+# ══════════════════════════════════════════════════════════
+
+# ── run schedule ───────────────────────────────────────────
+n_days      = 7
+T_cyc       = 2.0     # uniform cycle time [s]
+start_hour  = 9       # first shot (Monday, 24h clock)
+hour_on     = 8       # daily switch-on
+hour_off    = 24      # daily switch-off (24 = midnight)
+
+# ── MOT failures ───────────────────────────────────────────
+p_fail      = 0.01    # probability each shot fails
+
+# ── lift events ────────────────────────────────────────────
+lift_mean_period = 300    # mean gap between lift starts [s]
+lift_speed       = 1.0    # lift travel speed [m/s]
+h_lift_lo        = -10    # lift bottom [m]
+h_lift_hi        = 20     # lift top [m]
+lift_pad         = 10.0   # excision padding either side [s]
+M_lift           = 1000   # lift mass [kg]
+D_lift           = 10     # lift horizontal offset [m]
+lift_duration    = (h_lift_hi - h_lift_lo) / lift_speed   # 30 s
+
+# ── physics ────────────────────────────────────────────────
+d_e = 1;  d_m_e = 1
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81;  M_osc = 1;  h_0 = 1;  D_0 = 5;  A = 1
+f_sig = 0.12
+u0 = 3.86;  dt = 0.01;  T = 0.73
+T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
+
+G_nat = 6.708e-39;  m_phi = 4e-16;  rho_phi = 0.3;  f_uldm = 0.1
+theta = np.pi/2;  xi = 0.06;  omega_A = 2.67e15
+L_base = 10;  delta_r = 5;  n_lmt = 1000;  conv_factor = 2.77e-12
+
+rng_seed = 42
+
+# ══════════════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════════════
+
+def uldm_phase(t):
+    dw = (omega_A*np.sqrt(G_nat*4*np.pi)*(d_m_e+(2+xi)*d_e)
+          *(np.sqrt(2*rho_phi)/m_phi)*conv_factor)
+    op = 2*np.pi*f_uldm
+    return (8*(dw/op)*(delta_r/L_base)
+            *np.sin(op*n_lmt*L_base/(2*3e8))
+            *np.sin(op*(T-(n_lmt-1)*L_base/3e8)/2)
+            *np.sin(op*T/2)
+            *np.cos(op*((T_fly+L_base/3e8)/2+t)+theta))
+
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0+k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _ = atom_path(p1[-1] if len(p1) else float(floor), v1+k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly-len(path), float(floor))])
+    return path[:N_fly]
+
+def V_osc(z, h):  return -G*M_osc  / np.sqrt(D_0**2    + (z-h)**2)
+def V_lift(z, h): return -G*M_lift  / np.sqrt(D_lift**2 + (z-h)**2)
+
+def ls_psd(t, y, freqs, chunk=256):
+    y = y - y.mean()
+    dt_eff = (t[-1]-t[0])/(len(t)-1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w  = 2*np.pi*freqs[i:i+chunk]
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1))/(2*w)
+        sh  = wt - (w*tau)[:,None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct@y;  S  = st@y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff*0.5*(C**2/CC + S**2/SS)
+    return out
+
+# ══════════════════════════════════════════════════════════
+# BUILD TIMELINE
+# ══════════════════════════════════════════════════════════
+rng = np.random.default_rng(rng_seed)
+
+T_span_total = n_days * 86400
+N_grid       = int(T_span_total / T_cyc)
+t_starts_all = np.arange(N_grid) * T_cyc
+t_meas_all   = t_starts_all + T_fly
+
+# ── 1. nighttime mask ──────────────────────────────────────
+tod    = (t_meas_all + start_hour*3600) % 86400
+active = (tod >= hour_on*3600) & (tod < hour_off*3600)
+
+# ── 2. MOT failures ────────────────────────────────────────
+mot_ok = rng.random(N_grid) >= p_fail
+active &= mot_ok
+
+# ── 3. lift event times (Poisson) ─────────────────────────
+lift_starts = []
+t_next = rng.exponential(lift_mean_period)
+while t_next + lift_duration < T_span_total - 20:
+    if t_next > 20:
+        lift_starts.append(t_next)
+    t_next += lift_duration + rng.exponential(lift_mean_period)
+lift_starts = np.array(lift_starts)
+
+# surviving (non-nighttime, non-MOT-failure) shots before lift excision
+t_starts_surv = t_starts_all[active]
+t_meas_surv   = t_meas_all[active]
+N_surv        = len(t_meas_surv)
+
+print(f"Total grid shots    : {N_grid:,}")
+print(f"After nighttime     : {active.sum():,}  ({100*active.mean():.1f}%)")
+print(f"After MOT failures  : {N_surv:,}  ({100*N_surv/N_grid:.1f}%)")
+print(f"Lift events         : {len(lift_starts)}")
+
+# ══════════════════════════════════════════════════════════
+# COMPUTE PHASES
+# ══════════════════════════════════════════════════════════
+lower1 = arm_positions(0,0,upper=False);  upper1 = arm_positions(0,0,upper=True)
+lower2 = arm_positions(5,5,upper=False);  upper2 = arm_positions(5,5,upper=True)
+
+phases    = np.zeros(N_surv)
+lift_mask = np.zeros(N_surv, dtype=bool)
+
+print(f"\nComputing {N_surv:,} phases...")
+for k in range(N_surv):
+    t_s   = t_starts_surv[k]
+    t_abs = t_s + t_local
+
+    # GGN oscillator
+    h_k  = h_0 + A*np.cos(2*np.pi*f_sig*t_abs)
+    dphi = (V_osc(upper1, h_k) - V_osc(lower1, h_k)
+           -V_osc(upper2, h_k) + V_osc(lower2, h_k))
+
+    # lift contribution
+    for t_lift in lift_starts:
+        t_lift_end = t_lift + lift_duration
+        if t_lift_end > t_s and t_lift < t_s + T_fly:
+            h_l    = np.clip(h_lift_lo + lift_speed*(t_abs - t_lift),
+                             h_lift_lo, h_lift_hi)
+            active_l = (t_abs >= t_lift) & (t_abs <= t_lift_end)
+            dl = np.zeros(N_fly)
+            dl[active_l] = (V_lift(upper1[active_l], h_l[active_l])
+                           -V_lift(lower1[active_l], h_l[active_l])
+                           -V_lift(upper2[active_l], h_l[active_l])
+                           +V_lift(lower2[active_l], h_l[active_l]))
+            dphi += dl
+
+    phases[k] = (m_atom/hbar)*np.trapezoid(dphi, t_local) + uldm_phase(t_meas_surv[k])
+
+    # flag lift-contaminated cycles
+    for t_lift in lift_starts:
+        if (t_meas_surv[k] >= t_lift - lift_pad and
+                t_meas_surv[k] <= t_lift + lift_duration + lift_pad):
+            lift_mask[k] = True
+
+    if (k+1) % 10000 == 0:
+        print(f"  {k+1:,}/{N_surv:,}")
+
+# ── 4. lift excision ───────────────────────────────────────
+t_clean = t_meas_surv[~lift_mask]
+y_clean = phases[~lift_mask]
+N_clean = len(t_clean)
+
+print(f"\nLift-contaminated   : {lift_mask.sum():,}")
+print(f"Clean shots         : {N_clean:,}  ({100*N_clean/N_grid:.1f}% of total)")
+
+# ══════════════════════════════════════════════════════════
+# LS
+# ══════════════════════════════════════════════════════════
+f_nyq  = 1/(2*T_cyc)
+f_grid = np.linspace(1/T_span_total, f_nyq, 3000)
+
+print("Computing LS...")
+S = ls_psd(t_clean, y_clean, f_grid)
+
+uldm_peak  = np.sqrt(ls_psd(t_clean, y_clean, np.array([f_uldm]))[0])
+mask_floor = ((f_grid > 0.15) & (f_grid < 0.45)
+              & ~((f_grid >= f_uldm-0.01) & (f_grid <= f_uldm+0.01))
+              & ~((f_grid >= f_sig -0.02) & (f_grid <= f_sig +0.02)))
+floor_med  = np.median(np.sqrt(S[mask_floor]))
+
+# ══════════════════════════════════════════════════════════
+# PLOTS
+# ══════════════════════════════════════════════════════════
+
+# ── time series ────────────────────────────────────────────
+t_days_surv  = t_meas_surv / 86400
+t_days_clean = t_clean      / 86400
+
+fig1, ax = plt.subplots(figsize=(15, 4))
+ax.plot(t_days_surv,  phases*1e6,      color='lightgrey', lw=0.3,
+        label='Lift-contaminated', zorder=1)
+ax.plot(t_days_clean, y_clean*1e6,     color='steelblue', lw=0.4,
+        label='Clean', zorder=2)
+
+# shade nighttime
+for day in range(n_days+1):
+    ax.axvspan(day - (24-hour_off)/24, day + hour_on/24,
+               color='lightyellow', alpha=0.8, zorder=0)
+ax.axvspan(np.nan, np.nan, color='lightyellow', alpha=0.8,
+           label=f'Night ({hour_off%24:02d}:00–{hour_on:02d}:00)')
+
+# mark lift events
+for t_lift in lift_starts:
+    ax.axvspan((t_lift - lift_pad)/86400,
+               (t_lift + lift_duration + lift_pad)/86400,
+               color='firebrick', alpha=0.2, zorder=0)
+ax.axvspan(np.nan, np.nan, color='firebrick', alpha=0.2, label='Lift events')
+
+ax.set_xlabel('Time [days from Monday {:02d}:00]'.format(start_hour), fontsize=12)
+ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax.set_title(f'Full pipeline time series — {n_days} days', fontsize=12)
+ax.set_xlim(0, n_days)
+ax.legend(fontsize=9, ncol=4)
+fig1.tight_layout()
+plt.show()
+
+# ── periodogram ────────────────────────────────────────────
+T_span_clean = t_clean[-1] - t_clean[0]
+f_fine = np.linspace(f_uldm - 10/T_span_clean, f_uldm + 10/T_span_clean, 200)
+S_fine = ls_psd(t_clean, y_clean, f_fine)
+
+fig2, ax2 = plt.subplots(figsize=(13, 5))
+ax2.plot(f_grid, np.sqrt(S), color='steelblue', lw=0.8)
+ax2.plot(f_fine, np.sqrt(S_fine), color='steelblue', lw=0.8)
+ax2.axhline(floor_med, ls='-', color='darkorange', lw=1.4,
+            label=f'Floor median = {floor_med:.3e}')
+ax2.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+            label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
+ax2.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+            label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
+ax2.set_xlabel('$f$ [Hz]', fontsize=12)
+ax2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax2.set_title(f'LS periodogram — {N_clean:,} clean shots after all cuts', fontsize=12)
+ax2.legend(fontsize=10)
+fig2.tight_layout()
+plt.show()
+
+# ══════════════════════════════════════════════════════════
+# SUMMARY
+# ══════════════════════════════════════════════════════════
+print(f"\n{'='*55}")
+print(f"  Total grid shots      : {N_grid:,}")
+print(f"  Lost to night         : {N_grid - active.sum():,}")
+print(f"  Lost to MOT failures  : {(~mot_ok & ~(tod < hour_on*3600) & ~(tod >= hour_off*3600)).sum():,}")
+print(f"  Lost to lift excision : {lift_mask.sum():,}")
+print(f"  Clean shots remaining : {N_clean:,}  ({100*N_clean/N_grid:.1f}%)")
+print(f"  ULDM peak   sqrt(S)   : {uldm_peak:.4e} rad/sqrt(Hz)")
+print(f"  Floor median          : {floor_med:.4e} rad/sqrt(Hz)")
+print(f"  SNR                   : {uldm_peak/floor_med:.3f}")
+print(f"  d_min                 : {floor_med/uldm_peak:.4f}")
+print(f"{'='*55}")
