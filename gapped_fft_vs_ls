@@ -1,0 +1,169 @@
+# -*- coding: utf-8 -*-
+"""
+Uniform cadence with random shot failures — FFT vs Lomb-Scargle comparison.
+
+Each cycle independently fails with probability p_fail.
+FFT is applied to the full uniform grid with failed shots zero-filled.
+LS uses only the surviving measurement times.
+
+This illustrates why FFT fails on gapped data while LS handles it naturally.
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── parameters ─────────────────────────────────────────────────────────────────
+N_total  = 2000       # total shots attempted
+T_cyc    = 2.0        # uniform cycle time [s]
+p_fail   = 0.001      # probability of a shot failing
+rng_seed = 42
+d_e = 1;  d_m_e = 1
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81;  M = 1;  h_0 = 1;  D_0 = 5;  A = 1
+f_sig = 0.12
+u0 = 3.86;  dt = 0.01;  T = 0.73
+T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
+
+G_nat = 6.708e-39;  m_phi = 4e-16;  rho_phi = 0.3;  f_uldm = 0.1
+theta = np.pi/2;  xi = 0.06;  omega_A = 2.67e15
+L_base = 10;  delta_r = 5;  n_lmt = 1000;  conv_factor = 2.77e-12
+
+def uldm_phase(t):
+    delta_omega_A = (omega_A*np.sqrt(G_nat*4*np.pi)*(d_m_e+(2+xi)*d_e)
+                     *(np.sqrt(2*rho_phi)/m_phi)*conv_factor)
+    omega_phi = 2*np.pi*f_uldm
+    return (8*(delta_omega_A/omega_phi)*(delta_r/L_base)
+            *np.sin(omega_phi*n_lmt*L_base/(2*3e8))
+            *np.sin(omega_phi*(T-(n_lmt-1)*L_base/3e8)/2)
+            *np.sin(omega_phi*T/2)
+            *np.cos(omega_phi*((T_fly+L_base/3e8)/2+t)+theta))
+
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0+k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _ = atom_path(p1[-1] if len(p1) else float(floor), v1+k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly-len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G*M/np.sqrt(D_0**2+(z-h)**2)
+
+def ls_psd(t, y, freqs, chunk=256):
+    y = y - y.mean()
+    dt_eff = (t[-1]-t[0])/(len(t)-1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w  = 2*np.pi*freqs[i:i+chunk]
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1))/(2*w)
+        sh  = wt - (w*tau)[:,None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct@y;  S  = st@y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff*0.5*(C**2/CC + S**2/SS)
+    return out
+
+# ── arm positions ──────────────────────────────────────────────────────────────
+lower1 = arm_positions(0,0,upper=False);  upper1 = arm_positions(0,0,upper=True)
+lower2 = arm_positions(5,5,upper=False);  upper2 = arm_positions(5,5,upper=True)
+
+# ── uniform cadence with random failures ──────────────────────────────────────
+rng     = np.random.default_rng(rng_seed)
+all_idx = np.arange(N_total)
+survived = rng.random(N_total) >= p_fail   # True = shot succeeded
+
+N_survived = survived.sum()
+print(f"Shots attempted : {N_total}")
+print(f"Shots failed    : {(~survived).sum()}  ({100*p_fail:.0f}% rate)")
+print(f"Shots surviving : {N_survived}  ({100*N_survived/N_total:.1f}%)")
+
+# all measurement times on the uniform grid
+t_all  = all_idx * T_cyc + T_fly
+t_good = t_all[survived]
+
+# ── compute phases for surviving shots only ────────────────────────────────────
+phases_good = np.zeros(N_survived)
+good_idx    = np.where(survived)[0]
+
+print("Computing phases...")
+for j, k in enumerate(good_idx):
+    t_start = k * T_cyc
+    t_abs   = t_start + t_local
+    h_k     = h_0 + A*np.cos(2*np.pi*f_sig*t_abs)
+    pd1     = V(upper1, h_k) - V(lower1, h_k)
+    pd2     = V(upper2, h_k) - V(lower2, h_k)
+    phases_good[j] = ((m_atom/hbar)*np.trapezoid(pd1-pd2, t_local)
+                      + uldm_phase(t_good[j]))
+
+# ── FFT: treat surviving shots as uniformly spaced (naive approach) ───────────
+# Pretends the gaps don't exist — surviving phases compressed together
+# as if each follows T_cyc after the last, ignoring missing slots.
+y_fft   = phases_good - phases_good.mean()
+f_fft   = np.fft.rfftfreq(N_survived, d=T_cyc)
+S_fft   = (T_cyc/N_survived) * np.abs(np.fft.rfft(y_fft))**2
+f_nyq   = 1/(2*T_cyc)
+mask_fft = (f_fft > 0) & (f_fft <= f_nyq)
+
+# ── LS: on surviving timestamps only ─────────────────────────────────────────
+f_max  = f_nyq + 0.05
+f_grid = np.linspace(0.5/(N_survived*T_cyc), f_max, 8000)
+
+print("Computing LS...")
+S_ls = ls_psd(t_good, phases_good, f_grid)
+
+# ── figure ─────────────────────────────────────────────────────────────────────
+fig, (ax_f, ax_l) = plt.subplots(1, 2, figsize=(14, 5))
+
+ax_f.plot(f_fft[mask_fft], np.sqrt(S_fft[mask_fft]),
+          color='steelblue', lw=0.8)
+ax_f.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+             label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
+ax_f.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+             label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_f.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
+             label=f'Nyquist = {f_nyq:.3f} Hz')
+ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_f.set_title(f'FFT — surviving shots treated as uniform\n'
+               f'(gaps ignored, timing errors accumulate)', fontsize=11)
+ax_f.legend(fontsize=9)
+
+ax_l.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.8)
+ax_l.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+             label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
+ax_l.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+             label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_l.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_l.set_title(f'Lomb-Scargle — surviving timestamps only\n'
+               f'(handles gaps correctly, no Nyquist folding)', fontsize=11)
+ax_l.legend(fontsize=9)
+
+fig.suptitle(f'Gapped uniform cadence: $N_\\mathrm{{total}}={N_total}$, '
+             f'$p_\\mathrm{{fail}}={100*p_fail:.0f}\\%$, '
+             f'$N_\\mathrm{{survived}}={N_survived}$, '
+             f'$T_\\mathrm{{cyc}}={T_cyc}$ s', fontsize=12)
+fig.tight_layout()
+plt.savefig('gapped_fft_vs_ls.pdf', bbox_inches='tight')
+plt.show()
+
+# ── terminal summary ───────────────────────────────────────────────────────────
+mask_sig  = (f_grid >= f_sig  - 0.02) & (f_grid <= f_sig  + 0.02)
+mask_uldm = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
+
+print(f"\n{'='*45}")
+print(f"  GGN peak  (LS) : {np.sqrt(S_ls[mask_sig].max()):.4e} rad/sqrt(Hz)")
+print(f"  ULDM peak (LS) : {np.sqrt(ls_psd(t_good, phases_good, np.array([f_uldm]))[0]):.4e} rad/sqrt(Hz)")
+print(f"{'='*45}")
