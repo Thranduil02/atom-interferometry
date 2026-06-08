@@ -27,7 +27,7 @@ G = 6.67e-11;  g = 9.81
 M_osc = 1;  h_0 = 1;  D_0 = 5;  A = 1;  f_sig = 0.12
 # lift parameters
 M_lift = 1000;  D_lift = 10
-h_lift_lo = -10;  h_lift_hi = 20;  v_lift = 1.0
+h_lift_lo = -10;  h_lift_hi = 20;  v_lift = 2.0
 lift_duration = (h_lift_hi - h_lift_lo) / v_lift   # 30 s
 
 u0 = 3.86;  dt = 0.01;  T = 0.73;  T_cyc = 2.0
