@@ -197,20 +197,28 @@ axes2[0].set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
 fig2.suptitle('Lomb-Scargle for different shot-failure rates', fontsize=12)
 fig2.tight_layout()
 
-# ── plot 3: noise floor vs % missed shots (0 – 5 %) ─────────────────────────
+# ── plot 3 & 4: scan failure rates ───────────────────────────────────────────
+# ULDM peak ASD scales linearly with d, so d_min = noise_floor / uldm_peak(d=1)
+_mask_uldm_peak = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
+
 p_scan        = np.linspace(0, 0.05, 200)
 floors_median = []
-print("\nScanning failure rates for noise-floor curve...")
+d_min_scan    = []
+print("\nScanning failure rates for noise-floor and d_min curves...")
 for p in p_scan:
     surv = rng.random(N_total) >= p
     tg   = t_all[surv]
     pg   = phases_all[surv]
     if len(tg) < 10:
         floors_median.append(np.nan)
+        d_min_scan.append(np.nan)
         continue
-    S   = ls_psd(tg, pg, f_grid)
-    asd = np.sqrt(S[~_peak_mask])
-    floors_median.append(np.median(asd))
+    S          = ls_psd(tg, pg, f_grid)
+    asd        = np.sqrt(S)
+    floor      = np.median(asd[~_peak_mask])
+    uldm_peak  = asd[_mask_uldm_peak].max()
+    floors_median.append(floor)
+    d_min_scan.append(floor / uldm_peak)
 
 fig3, ax3 = plt.subplots(figsize=(8, 4))
 ax3.scatter(100*p_scan, floors_median, color='steelblue', s=8)
@@ -218,5 +226,13 @@ ax3.set_xlabel('Missed shots [%]', fontsize=12)
 ax3.set_ylabel(r'Noise floor [rad/$\sqrt{\rm Hz}$]', fontsize=12)
 ax3.set_title('LS noise floor vs shot-failure rate', fontsize=12)
 fig3.tight_layout()
+
+fig4, ax4 = plt.subplots(figsize=(8, 4))
+ax4.scatter(100*p_scan, d_min_scan, color='darkorange', s=8)
+ax4.set_xlabel('Missed shots [%]', fontsize=12)
+ax4.set_ylabel(r'$d_{\rm min}$', fontsize=12)
+ax4.set_title(r'Minimum detectable $d$ (ULDM peak $=$ noise floor) vs shot-failure rate',
+              fontsize=11)
+fig4.tight_layout()
 
 plt.show()
