@@ -77,43 +77,92 @@ def ls_psd(t, y, freqs, chunk=64):
         out[i:i+chunk] = dt_eff*0.5*(C**2/CC + S**2/SS)
     return out
 
+# ── shared time grid ───────────────────────────────────────────────────────────
+T_span_total = n_days * 86400
+N_grid       = int(T_span_total / T_cyc)
+t_starts_all = np.arange(N_grid) * T_cyc
+t_meas_all   = t_starts_all + T_fly
+t_abs_all    = t_meas_all + start_hour * 3600   # seconds from Monday midnight
+
+f_nyq  = 1 / (2 * T_cyc)
+f_grid = np.linspace(1/T_span_total, f_nyq + 0.05, 8000)
+
+# ── arm positions (shared) ─────────────────────────────────────────────────────
+lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
+
+# ── plot helper ────────────────────────────────────────────────────────────────
+def make_figure(suptitle, t_meas_active, phases, gap_bands,
+                f_fft, S_fft, m_fft, S_ls, fft_subtitle='', ls_subtitle=''):
+    """
+    gap_bands: list of (start_tdays, end_tdays) tuples for grey shading.
+    t_meas_active: shot times in seconds from Monday start_hour:00.
+    """
+    fig = plt.figure(figsize=(15, 9))
+    gs  = fig.add_gridspec(2, 2, height_ratios=[1, 1.4], hspace=0.4, wspace=0.3)
+    ax_ts = fig.add_subplot(gs[0, :])
+    ax_f  = fig.add_subplot(gs[1, 0])
+    ax_l  = fig.add_subplot(gs[1, 1])
+
+    # ── time series ──
+    t_days = t_meas_active / 86400
+    ax_ts.plot(t_days, phases * 1e6, color='steelblue', lw=0.4, rasterized=True)
+    for (g0, g1) in gap_bands:
+        ax_ts.axvspan(g0, g1, color='lightgrey', alpha=0.6, zorder=0)
+    ax_ts.axvspan(np.nan, np.nan, color='lightgrey', alpha=0.6, label='Shutdown')
+    ax_ts.set_xlabel(f'Time [days from Monday {start_hour:02d}:00]', fontsize=11)
+    ax_ts.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=11)
+    ax_ts.set_title('Raw differential phase', fontsize=11)
+    ax_ts.set_xlim(0, n_days)
+    ax_ts.legend(fontsize=9)
+
+    # ── FFT ──
+    ax_f.plot(f_fft[m_fft], np.sqrt(S_fft[m_fft]), color='steelblue', lw=0.7)
+    ax_f.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+                 label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
+    ax_f.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+                 label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
+    ax_f.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
+                 label=f'Nyquist = {f_nyq:.3f} Hz')
+    ax_f.set_xlabel('$f$ [Hz]', fontsize=11)
+    ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=11)
+    ax_f.set_title(f'FFT — gaps zero-padded\n{fft_subtitle}', fontsize=10)
+    ax_f.legend(fontsize=8)
+    ax_f.set_xlim(0, f_nyq + 0.05)
+
+    # ── Lomb-Scargle ──
+    ax_l.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7)
+    ax_l.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+                 label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
+    ax_l.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+                 label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
+    ax_l.set_xlabel('$f$ [Hz]', fontsize=11)
+    ax_l.set_title(f'Lomb-Scargle — true timestamps\n{ls_subtitle}', fontsize=10)
+    ax_l.legend(fontsize=8)
+    ax_l.set_xlim(0, f_nyq + 0.05)
+
+    fig.suptitle(suptitle, fontsize=12)
+    fig.tight_layout()
+    return fig
+
 # ════════════════════════════════════════════════════════════════════════════════
 # Part 1: uniform nighttime — fixed on/off times every day
 # ════════════════════════════════════════════════════════════════════════════════
-# ── build schedule ─────────────────────────────────────────────────────────────
-# t=0 corresponds to Monday start_hour:00
-# Convert times-of-day to seconds offset from start_hour on day 0
-def is_active(t_sec):
-    """Return bool array: True if shot at time t_sec is in active window."""
-    # time-of-day in seconds (0 = midnight)
-    tod = (t_sec + start_hour * 3600) % 86400
+def is_active(t_meas):
+    tod = (t_meas + start_hour * 3600) % 86400
     return (tod >= hour_on * 3600) & (tod < hour_off * 3600)
 
-T_span_total = n_days * 86400   # full week in seconds
-N_grid       = int(T_span_total / T_cyc)
-
-# all candidate shot times (measurement time = start + T_fly)
-t_starts_all = np.arange(N_grid) * T_cyc
-t_meas_all   = t_starts_all + T_fly
-
-active = is_active(t_meas_all)
+active          = is_active(t_meas_all)
 t_starts_active = t_starts_all[active]
 t_meas_active   = t_meas_all[active]
-N_active = len(t_meas_active)
+N_active        = len(t_meas_active)
 
-# print schedule summary
-active_per_day = (hour_off - hour_on) * 3600 / T_cyc
 print(f"Schedule: ON {hour_on:02d}:00 – {hour_off % 24:02d}:00  "
       f"({hour_off-hour_on}h active, {hour_on}h off per day)")
 print(f"Start: Monday {start_hour:02d}:00")
 print(f"Total grid shots : {N_grid:,}")
 print(f"Active shots     : {N_active:,}  ({100*N_active/N_grid:.1f}%)")
 
-# ── arm positions ──────────────────────────────────────────────────────────────
-lower1 = arm_positions(0,0,upper=False);  upper1 = arm_positions(0,0,upper=True)
-lower2 = arm_positions(5,5,upper=False);  upper2 = arm_positions(5,5,upper=True)
-
-# ── phase computation ─────────────────────────────────────────────────────────
 phases = np.zeros(N_active)
 phases += uldm_phase_vec(t_meas_active)
 
@@ -122,112 +171,68 @@ for i in range(N_active):
     t_abs      = t_starts_active[i] + t_local
     h_k        = h_0 + A * np.cos(2*np.pi*f_sig*t_abs)
     pd         = ((V(upper1, h_k) - V(lower1, h_k))
-                 -(V(upper2, h_k) - V(lower2, h_k)))
+                 - (V(upper2, h_k) - V(lower2, h_k)))
     phases[i] += (m_atom/hbar) * np.trapezoid(pd, t_local)
     if (i+1) % 10000 == 0:
         print(f"  {i+1:,}/{N_active:,}")
 
-# ── FFT: surviving shots treated as uniformly spaced ─────────────────────────
-y_fft  = phases - phases.mean()
-f_fft  = np.fft.rfftfreq(N_active, d=T_cyc)
-S_fft  = (T_cyc/N_active) * np.abs(np.fft.rfft(y_fft))**2
-f_nyq  = 1/(2*T_cyc)
-m_fft  = (f_fft > 0) & (f_fft <= f_nyq + 0.05)
+y_full = np.zeros(N_grid)
+y_full[active] = phases - phases.mean()
+f_fft = np.fft.rfftfreq(N_grid, d=T_cyc)
+S_fft = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full))**2
+m_fft = (f_fft > 0) & (f_fft <= f_nyq + 0.05)
 
-# ── LS: on active timestamps ──────────────────────────────────────────────────
-f_grid = np.linspace(1/T_span_total, f_nyq + 0.05, 8000)
 print("Computing LS...")
-S_ls   = ls_psd(t_meas_active, phases, f_grid)
+S_ls = ls_psd(t_meas_active, phases, f_grid)
 
-# ── figure ─────────────────────────────────────────────────────────────────────
-fig, (ax_f, ax_l) = plt.subplots(1, 2, figsize=(15, 5))
+# gap bands: night d runs from hour_off on day d to hour_on on day d+1
+gap_bands1 = []
+for d in range(n_days):
+    gs_abs = d * 86400 + hour_off * 3600
+    ge_abs = (d+1) * 86400 + hour_on * 3600
+    gap_bands1.append(((gs_abs - start_hour*3600) / 86400,
+                        (ge_abs - start_hour*3600) / 86400))
 
-ax_f.plot(f_fft[m_fft], np.sqrt(S_fft[m_fft]), color='steelblue', lw=0.7)
-ax_f.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-             label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-ax_f.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-             label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
-ax_f.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
-             label=f'Nyquist = {f_nyq:.3f} Hz')
-ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_f.set_title('FFT — surviving shots treated as uniform\n'
-               '(timing errors from gaps distort spectrum)', fontsize=11)
-ax_f.legend(fontsize=9)
-ax_f.set_xlim(0, f_nyq + 0.05)
-
-ax_l.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7)
-ax_l.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-             label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-ax_l.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-             label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
-ax_l.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_l.set_title('Lomb-Scargle — active timestamps only\n'
-               '(handles gaps correctly)', fontsize=11)
-ax_l.legend(fontsize=9)
-ax_l.set_xlim(0, f_nyq + 0.05)
-
-active_h = hour_off - hour_on
-fig.suptitle(f'{n_days}-day run: ON {hour_on:02d}:00–{hour_off%24:02d}:00 '
-             f'({active_h}h/day active), start Monday {start_hour:02d}:00  |  '
-             f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active:,}$',
-             fontsize=11)
-fig.tight_layout()
-plt.show()
+make_figure(
+    suptitle=(f'{n_days}-day run: ON {hour_on:02d}:00–{hour_off%24:02d}:00 '
+              f'({hour_off-hour_on}h/day active), start Monday {start_hour:02d}:00  |  '
+              f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active:,}$'),
+    t_meas_active=t_meas_active, phases=phases, gap_bands=gap_bands1,
+    f_fft=f_fft, S_fft=S_fft, m_fft=m_fft, S_ls=S_ls,
+    fft_subtitle='(zero-padded gaps → periodic sidebands at $f\\pm n/\\mathrm{day}$)',
+    ls_subtitle='(handles gaps correctly)',
+)
 
 print(f"\n  GGN peak  (LS): "
       f"{np.sqrt(S_ls[(f_grid>=f_sig-0.02)&(f_grid<=f_sig+0.02)].max()):.4e}")
 print(f"  ULDM peak (LS): "
       f"{np.sqrt(ls_psd(t_meas_active, phases, np.array([f_uldm]))[0]):.4e}")
 
-# ── raw time series ────────────────────────────────────────────────────────────
-t_days = t_meas_active / 86400   # convert to days
-
-fig2, ax = plt.subplots(figsize=(15, 4))
-ax.plot(t_days, phases * 1e6, color='steelblue', lw=0.4, rasterized=True)
-
-# shade the nighttime gaps
-for day in range(n_days + 1):
-    # gap: from midnight (day boundary) to hour_on
-    gap_start = day - (24 - hour_off) / 24   # fraction of day
-    gap_end   = day + hour_on / 24
-    ax.axvspan(gap_start, gap_end, color='lightgrey', alpha=0.6, zorder=0)
-# label one
-ax.axvspan(np.nan, np.nan, color='lightgrey', alpha=0.6,
-           label=f'Shutdown ({hour_off%24:02d}:00–{hour_on:02d}:00)')
-
-ax.set_xlabel('Time [days from Monday {:02d}:00]'.format(start_hour), fontsize=12)
-ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
-ax.set_title(f'Raw differential phase — {n_days}-day run', fontsize=12)
-ax.set_xlim(0, n_days)
-ax.legend(fontsize=10)
-fig2.tight_layout()
-plt.show()
-
 # ════════════════════════════════════════════════════════════════════════════════
 # Part 2: jittered nighttime — ±30 min uniform on/off times
 # ════════════════════════════════════════════════════════════════════════════════
 rng2     = np.random.default_rng(123)
-jitter_s = 60 * 60   # 30 min in seconds
+jitter_s = 30 * 60   # ±30 min in seconds
 
-on_times  = hour_on  * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days)
-off_times = np.clip(hour_off * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days),
-                    None, 86400)
+on_times2  = hour_on  * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days)
+off_times2 = np.clip(hour_off * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days),
+                     None, 86400)
 
-tod_all     = (t_meas_all + start_hour * 3600) % 86400
-day_idx_all = ((t_meas_all + start_hour * 3600) // 86400).astype(int)
+day_idx_all = (t_abs_all // 86400).astype(int)
+tod_all     = t_abs_all % 86400
 
 active2 = np.zeros(N_grid, dtype=bool)
 for d in range(n_days):
-    active2 |= (day_idx_all == d) & (tod_all >= on_times[d]) & (tod_all < off_times[d])
+    active2 |= ((day_idx_all == d) & (tod_all >= on_times2[d])
+                                    & (tod_all <  off_times2[d]))
 
 t_starts_active2 = t_starts_all[active2]
 t_meas_active2   = t_meas_all[active2]
 N_active2        = len(t_meas_active2)
 
-print(f"\nJittered schedule: {N_active2:,} active shots  ({100*N_active2/N_grid:.1f}%)")
+print(f"\nJittered schedule (±30 min): {N_active2:,} active shots  "
+      f"({100*N_active2/N_grid:.1f}%)")
 
-# ── phases ────────────────────────────────────────────────────────────────────
 phases2  = np.zeros(N_active2)
 phases2 += uldm_phase_vec(t_meas_active2)
 
@@ -236,56 +241,110 @@ for i in range(N_active2):
     t_abs      = t_starts_active2[i] + t_local
     h_k        = h_0 + A * np.cos(2*np.pi*f_sig*t_abs)
     pd         = ((V(upper1, h_k) - V(lower1, h_k))
-                 -(V(upper2, h_k) - V(lower2, h_k)))
+                 - (V(upper2, h_k) - V(lower2, h_k)))
     phases2[i] += (m_atom/hbar) * np.trapezoid(pd, t_local)
     if (i+1) % 10000 == 0:
         print(f"  {i+1:,}/{N_active2:,}")
 
-# ── FFT ───────────────────────────────────────────────────────────────────────
-y_fft2 = phases2 - phases2.mean()
-f_fft2 = np.fft.rfftfreq(N_active2, d=T_cyc)
-S_fft2 = (T_cyc/N_active2) * np.abs(np.fft.rfft(y_fft2))**2
+y_full2 = np.zeros(N_grid)
+y_full2[active2] = phases2 - phases2.mean()
+f_fft2 = np.fft.rfftfreq(N_grid, d=T_cyc)
+S_fft2 = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full2))**2
 m_fft2 = (f_fft2 > 0) & (f_fft2 <= f_nyq + 0.05)
 
-# ── LS ────────────────────────────────────────────────────────────────────────
 print("Computing LS...")
 S_ls2 = ls_psd(t_meas_active2, phases2, f_grid)
 
-# ── figure ────────────────────────────────────────────────────────────────────
-fig3, (ax_f3, ax_l3) = plt.subplots(1, 2, figsize=(15, 5))
+# gap bands: one inter-day interval per night
+gap_bands2 = []
+for d in range(n_days - 1):
+    gs_abs = d * 86400 + off_times2[d]
+    ge_abs = (d+1) * 86400 + on_times2[d+1]
+    gap_bands2.append(((gs_abs - start_hour*3600) / 86400,
+                        (ge_abs - start_hour*3600) / 86400))
+# last shutdown (no next morning to bound it — shade to edge of plot)
+gs_abs = (n_days-1) * 86400 + off_times2[n_days-1]
+gap_bands2.append(((gs_abs - start_hour*3600) / 86400, n_days))
 
-ax_f3.plot(f_fft2[m_fft2], np.sqrt(S_fft2[m_fft2]), color='steelblue', lw=0.7)
-ax_f3.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-              label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-ax_f3.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-              label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
-ax_f3.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
-              label=f'Nyquist = {f_nyq:.3f} Hz')
-ax_f3.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_f3.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_f3.set_title('FFT — jittered schedule, shots treated as uniform\n'
-                '(incoherent gap phases smear the spectrum)', fontsize=11)
-ax_f3.legend(fontsize=9)
-ax_f3.set_xlim(0, f_nyq + 0.05)
-
-ax_l3.plot(f_grid, np.sqrt(S_ls2), color='seagreen', lw=0.7)
-ax_l3.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-              label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-ax_l3.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-              label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
-ax_l3.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_l3.set_title('Lomb-Scargle — jittered timestamps\n'
-                '(still recovers both peaks correctly)', fontsize=11)
-ax_l3.legend(fontsize=9)
-ax_l3.set_xlim(0, f_nyq + 0.05)
-
-fig3.suptitle(f'{n_days}-day run, ±30 min on/off jitter  |  '
-              f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active2:,}$',
-              fontsize=11)
-fig3.tight_layout()
-plt.show()
+make_figure(
+    suptitle=(f'{n_days}-day run, ±30 min on/off jitter  |  '
+              f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active2:,}$'),
+    t_meas_active=t_meas_active2, phases=phases2, gap_bands=gap_bands2,
+    f_fft=f_fft2, S_fft=S_fft2, m_fft=m_fft2, S_ls=S_ls2,
+    fft_subtitle='(sidebands shift slightly with jittered gap edges)',
+    ls_subtitle='(still recovers both peaks correctly)',
+)
 
 print(f"\n  GGN peak  (LS, jittered): "
       f"{np.sqrt(S_ls2[(f_grid>=f_sig-0.02)&(f_grid<=f_sig+0.02)].max()):.4e}")
 print(f"  ULDM peak (LS, jittered): "
       f"{np.sqrt(ls_psd(t_meas_active2, phases2, np.array([f_uldm]))[0]):.4e}")
+
+# ════════════════════════════════════════════════════════════════════════════════
+# Part 3: variable gap lengths and start times each night
+# ════════════════════════════════════════════════════════════════════════════════
+rng3 = np.random.default_rng(456)
+# shutdown start: anywhere 20:00–02:00 (expressed as hours from midnight, so 20–26)
+# duration: 4–12 hours; turn-on = start + duration
+off_hours3 = rng3.uniform(20, 26, n_days)
+dur_hours3 = rng3.uniform(4,  12, n_days)
+on_hours3  = off_hours3 + dur_hours3
+
+# absolute seconds from Monday midnight for each gap
+gap_starts3_abs = np.array([d * 86400 + off_hours3[d] * 3600 for d in range(n_days)])
+gap_ends3_abs   = np.array([d * 86400 + on_hours3[d]  * 3600 for d in range(n_days)])
+
+active3 = np.ones(N_grid, dtype=bool)
+for gs, ge in zip(gap_starts3_abs, gap_ends3_abs):
+    active3 &= ~((t_abs_all >= gs) & (t_abs_all < ge))
+
+t_starts_active3 = t_starts_all[active3]
+t_meas_active3   = t_meas_all[active3]
+N_active3        = len(t_meas_active3)
+
+print(f"\nVariable gap schedule: {N_active3:,} active shots  "
+      f"({100*N_active3/N_grid:.1f}%)")
+for d in range(n_days):
+    print(f"  Night {d}: off {off_hours3[d]%24:.1f}h, "
+          f"on {on_hours3[d]%24:.1f}h  (duration {dur_hours3[d]:.1f}h)")
+
+phases3  = np.zeros(N_active3)
+phases3 += uldm_phase_vec(t_meas_active3)
+
+print(f"Computing {N_active3:,} phases...")
+for i in range(N_active3):
+    t_abs_i    = t_starts_active3[i] + t_local
+    h_k        = h_0 + A * np.cos(2*np.pi*f_sig*t_abs_i)
+    pd         = ((V(upper1, h_k) - V(lower1, h_k))
+                 - (V(upper2, h_k) - V(lower2, h_k)))
+    phases3[i] += (m_atom/hbar) * np.trapezoid(pd, t_local)
+    if (i+1) % 10000 == 0:
+        print(f"  {i+1:,}/{N_active3:,}")
+
+y_full3 = np.zeros(N_grid)
+y_full3[active3] = phases3 - phases3.mean()
+f_fft3 = np.fft.rfftfreq(N_grid, d=T_cyc)
+S_fft3 = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full3))**2
+m_fft3 = (f_fft3 > 0) & (f_fft3 <= f_nyq + 0.05)
+
+print("Computing LS...")
+S_ls3 = ls_psd(t_meas_active3, phases3, f_grid)
+
+gap_bands3 = [((gs - start_hour*3600) / 86400, (ge - start_hour*3600) / 86400)
+              for gs, ge in zip(gap_starts3_abs, gap_ends3_abs)]
+
+make_figure(
+    suptitle=(f'{n_days}-day run, variable shutdowns (4–12 h, start 20:00–02:00)  |  '
+              f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active3:,}$'),
+    t_meas_active=t_meas_active3, phases=phases3, gap_bands=gap_bands3,
+    f_fft=f_fft3, S_fft=S_fft3, m_fft=m_fft3, S_ls=S_ls3,
+    fft_subtitle='(aperiodic gaps spread sidebands into broad skirt)',
+    ls_subtitle='(correctly recovers both peaks)',
+)
+
+print(f"\n  GGN peak  (LS, variable): "
+      f"{np.sqrt(S_ls3[(f_grid>=f_sig-0.02)&(f_grid<=f_sig+0.02)].max()):.4e}")
+print(f"  ULDM peak (LS, variable): "
+      f"{np.sqrt(ls_psd(t_meas_active3, phases3, np.array([f_uldm]))[0]):.4e}")
+
+plt.show()
