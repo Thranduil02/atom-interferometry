@@ -92,17 +92,15 @@ lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=T
 lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
 
 # ── plot helper ────────────────────────────────────────────────────────────────
-def make_figure(suptitle, t_meas_active, phases, gap_bands,
-                f_fft, S_fft, m_fft, S_ls, fft_subtitle='', ls_subtitle=''):
+def make_figure(suptitle, t_meas_active, phases, gap_bands, S_ls, ls_subtitle=''):
     """
     gap_bands: list of (start_tdays, end_tdays) tuples for grey shading.
     t_meas_active: shot times in seconds from Monday start_hour:00.
     """
-    fig = plt.figure(figsize=(15, 9))
-    gs  = fig.add_gridspec(2, 2, height_ratios=[1, 1.4], hspace=0.4, wspace=0.3)
-    ax_ts = fig.add_subplot(gs[0, :])
-    ax_f  = fig.add_subplot(gs[1, 0])
-    ax_l  = fig.add_subplot(gs[1, 1])
+    fig = plt.figure(figsize=(15, 8))
+    gs  = fig.add_gridspec(2, 1, height_ratios=[1, 1.4], hspace=0.4)
+    ax_ts = fig.add_subplot(gs[0])
+    ax_l  = fig.add_subplot(gs[1])
 
     # ── time series ──
     t_days = t_meas_active / 86400
@@ -116,29 +114,16 @@ def make_figure(suptitle, t_meas_active, phases, gap_bands,
     ax_ts.set_xlim(0, n_days)
     ax_ts.legend(fontsize=9)
 
-    # ── FFT ──
-    ax_f.plot(f_fft[m_fft], np.sqrt(S_fft[m_fft]), color='steelblue', lw=0.7)
-    ax_f.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-                 label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-    ax_f.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-                 label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
-    ax_f.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
-                 label=f'Nyquist = {f_nyq:.3f} Hz')
-    ax_f.set_xlabel('$f$ [Hz]', fontsize=11)
-    ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=11)
-    ax_f.set_title(f'FFT — gaps zero-padded\n{fft_subtitle}', fontsize=10)
-    ax_f.legend(fontsize=8)
-    ax_f.set_xlim(0, f_nyq + 0.05)
-
     # ── Lomb-Scargle ──
     ax_l.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7)
-    ax_l.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-                 label=rf'$f_{{\rm GGN}}={f_sig}$ Hz')
-    ax_l.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-                 label=rf'$f_{{\rm ULDM}}={f_uldm}$ Hz')
+    tr = ax_l.get_xaxis_transform()
+    ax_l.text(f_sig,  1.02, rf'$f_{{\rm GGN}}$',  transform=tr,
+              ha='center', va='bottom', fontsize=9, color='k')
+    ax_l.text(f_uldm, 1.02, rf'$f_{{\rm ULDM}}$', transform=tr,
+              ha='center', va='bottom', fontsize=9, color='firebrick')
     ax_l.set_xlabel('$f$ [Hz]', fontsize=11)
+    ax_l.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=11)
     ax_l.set_title(f'Lomb-Scargle — true timestamps\n{ls_subtitle}', fontsize=10)
-    ax_l.legend(fontsize=8)
     ax_l.set_xlim(0, f_nyq + 0.05)
 
     fig.suptitle(suptitle, fontsize=12)
@@ -176,12 +161,6 @@ for i in range(N_active):
     if (i+1) % 10000 == 0:
         print(f"  {i+1:,}/{N_active:,}")
 
-y_full = np.zeros(N_grid)
-y_full[active] = phases - phases.mean()
-f_fft = np.fft.rfftfreq(N_grid, d=T_cyc)
-S_fft = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full))**2
-m_fft = (f_fft > 0) & (f_fft <= f_nyq + 0.05)
-
 print("Computing LS...")
 S_ls = ls_psd(t_meas_active, phases, f_grid)
 
@@ -198,9 +177,7 @@ make_figure(
               f'({hour_off-hour_on}h/day active), start Monday {start_hour:02d}:00  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active:,}$'),
     t_meas_active=t_meas_active, phases=phases, gap_bands=gap_bands1,
-    f_fft=f_fft, S_fft=S_fft, m_fft=m_fft, S_ls=S_ls,
-    fft_subtitle='(zero-padded gaps → periodic sidebands at $f\\pm n/\\mathrm{day}$)',
-    ls_subtitle='(handles gaps correctly)',
+    S_ls=S_ls, ls_subtitle='(handles gaps correctly)',
 )
 
 print(f"\n  GGN peak  (LS): "
@@ -246,12 +223,6 @@ for i in range(N_active2):
     if (i+1) % 10000 == 0:
         print(f"  {i+1:,}/{N_active2:,}")
 
-y_full2 = np.zeros(N_grid)
-y_full2[active2] = phases2 - phases2.mean()
-f_fft2 = np.fft.rfftfreq(N_grid, d=T_cyc)
-S_fft2 = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full2))**2
-m_fft2 = (f_fft2 > 0) & (f_fft2 <= f_nyq + 0.05)
-
 print("Computing LS...")
 S_ls2 = ls_psd(t_meas_active2, phases2, f_grid)
 
@@ -270,9 +241,7 @@ make_figure(
     suptitle=(f'{n_days}-day run, ±30 min on/off jitter  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active2:,}$'),
     t_meas_active=t_meas_active2, phases=phases2, gap_bands=gap_bands2,
-    f_fft=f_fft2, S_fft=S_fft2, m_fft=m_fft2, S_ls=S_ls2,
-    fft_subtitle='(sidebands shift slightly with jittered gap edges)',
-    ls_subtitle='(still recovers both peaks correctly)',
+    S_ls=S_ls2, ls_subtitle='(still recovers both peaks correctly)',
 )
 
 print(f"\n  GGN peak  (LS, jittered): "
@@ -321,12 +290,6 @@ for i in range(N_active3):
     if (i+1) % 10000 == 0:
         print(f"  {i+1:,}/{N_active3:,}")
 
-y_full3 = np.zeros(N_grid)
-y_full3[active3] = phases3 - phases3.mean()
-f_fft3 = np.fft.rfftfreq(N_grid, d=T_cyc)
-S_fft3 = (T_cyc/N_grid) * np.abs(np.fft.rfft(y_full3))**2
-m_fft3 = (f_fft3 > 0) & (f_fft3 <= f_nyq + 0.05)
-
 print("Computing LS...")
 S_ls3 = ls_psd(t_meas_active3, phases3, f_grid)
 
@@ -337,9 +300,7 @@ make_figure(
     suptitle=(f'{n_days}-day run, variable shutdowns (4–12 h, start 20:00–02:00)  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active3:,}$'),
     t_meas_active=t_meas_active3, phases=phases3, gap_bands=gap_bands3,
-    f_fft=f_fft3, S_fft=S_fft3, m_fft=m_fft3, S_ls=S_ls3,
-    fft_subtitle='(aperiodic gaps spread sidebands into broad skirt)',
-    ls_subtitle='(correctly recovers both peaks)',
+    S_ls=S_ls3, ls_subtitle='(correctly recovers both peaks)',
 )
 
 print(f"\n  GGN peak  (LS, variable): "
