@@ -1,0 +1,382 @@
+# -*- coding: utf-8 -*-
+"""
+7-day nighttime interferometry run.
+
+Schedule: hour_on → hour_off (next morning), ±jitter_amp_min jitter on switch times.
+Sources: 0.12 Hz oscillator GGN, scaffold GGN (34.1 Hz, LUT speedup),
+         lift transients (Poisson, ~5 min apart), ULDM (0.1 Hz).
+Cycle time jitter: T_cyc ~ Uniform(T_cyc_lo, T_cyc_hi).
+Shot failure rate: p_fail = 0.01 (1%).
+No denoising — raw output only.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import integrate
+from scipy.interpolate import RectBivariateSpline
+
+# ══════════════════════════════════════════════════════════════════════════════
+# User-editable parameters
+# ══════════════════════════════════════════════════════════════════════════════
+hour_on          = 17         # nighttime start [24h clock]
+hour_off         = 8          # nighttime end, next morning [24h clock]
+n_days           = 7
+start_hour       = 17         # first shot hour on Monday
+jitter_amp_min   = 30         # ± jitter on switch times [min]; set 0 to disable
+p_fail           = 0.01       # shot failure probability
+T_cyc_lo         = 1.95       # minimum cycle time [s]
+T_cyc_hi         = 2.05       # maximum cycle time [s]
+rng_seed         = 42
+
+# oscillator GGN
+f_sig  = 0.12;  M_osc = 1;  h_0 = 1;  D_0 = 5;  A = 1
+
+# scaffold
+f_osc = 34.1
+N_lut = 300   # scaffold phase look-up table resolution
+
+# lift
+M_lift = 1000;  D_lift = 10
+h_lift_lo = -10;  h_lift_hi = 20;  v_lift = 2.0
+lift_duration    = (h_lift_hi - h_lift_lo) / v_lift   # 15 s
+lift_mean_period = 300   # Poisson mean inter-arrival [s]
+
+# ULDM
+d_e = 1;  d_m_e = 1
+G_nat = 6.708e-39;  m_phi = 4e-16;  rho_phi = 0.3;  f_uldm = 0.1
+theta = np.pi/2;  xi = 0.06;  omega_A = 2.67e15
+L_base = 10;  delta_r = 5;  n_lmt = 1000;  conv_factor = 2.77e-12
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Constants / atom physics
+# ══════════════════════════════════════════════════════════════════════════════
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81
+u0 = 3.86;  dt = 0.01;  T = 0.73
+T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Helpers
+# ══════════════════════════════════════════════════════════════════════════════
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat*4*np.pi) * (d_m_e + (2+xi)*d_e)
+                     * (np.sqrt(2*rho_phi) / m_phi) * conv_factor)
+    omega_phi = 2*np.pi*f_uldm
+    return (8*(delta_omega_A/omega_phi)*(delta_r/L_base)
+            * np.sin(omega_phi*n_lmt*L_base/(2*3e8))
+            * np.sin(omega_phi*(T - (n_lmt-1)*L_base/3e8)/2)
+            * np.sin(omega_phi*T/2)
+            * np.cos(omega_phi*((T_fly + L_base/3e8)/2 + t) + theta))
+
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0+k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor), v1+k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly-len(path), float(floor))])
+    return path[:N_fly]
+
+lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
+
+def V_osc(z, h):
+    return -G*M_osc / np.sqrt(D_0**2 + (z-h)**2)
+
+def V_lift_fn(z, h):
+    return -G*M_lift / np.sqrt(D_lift**2 + (z-h)**2)
+
+def ls_psd(t, y, freqs, chunk=128):
+    y = y - y.mean()
+    dt_eff = (t[-1]-t[0]) / (len(t)-1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w   = 2*np.pi*freqs[i:i+chunk]
+        wt  = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2*w)
+        sh  = wt - (w*tau)[:,None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct@y;  S  = st@y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff*0.5*(C**2/CC + S**2/SS)
+    return out
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scaffold: build member list
+# ══════════════════════════════════════════════════════════════════════════════
+rho_steel = 7850.0;  R_edge = 0.0338;  L_cube = 1.0;  N_cubes = 10
+H_total = N_cubes * L_cube
+M_edge  = rho_steel * np.pi * R_edge**2 * L_cube
+h_half  = L_cube / 2.0
+
+members = []
+H_col = N_cubes * L_cube
+M_col = rho_steel * np.pi * R_edge**2 * H_col
+for sy in (-1, 1):
+    for sx in (-1, 1):
+        members.append({'dx': sx*h_half, 'dy': sy*h_half, 'dz': H_col/2.0,
+                        'M': M_col, 'R': R_edge, 'H': H_col, 'axis': 'z'})
+for k in range(N_cubes + 1):
+    z_ring = k * L_cube
+    for sy in (-1, 1):
+        members.append({'dx': 0.0, 'dy': sy*h_half, 'dz': z_ring,
+                        'M': M_edge, 'R': R_edge, 'H': L_cube, 'axis': 'x'})
+    for sx in (-1, 1):
+        members.append({'dx': sx*h_half, 'dy': 0.0, 'dz': z_ring,
+                        'M': M_edge, 'R': R_edge, 'H': L_cube, 'axis': 'y'})
+
+A_bottom = 1e-6;  A_top = 1e-4
+amplitudes = np.array([A_bottom + (A_top-A_bottom)*m['dz']/H_total for m in members])
+
+print(f"Scaffold: {len(members)} members, "
+      f"total mass = {sum(m['M'] for m in members):.1f} kg")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scaffold: gravitational potential grid (alpha, z)
+# ══════════════════════════════════════════════════════════════════════════════
+def cylinder_potential(x, y, z, cx, cy, cz, M, R, H, axis='z'):
+    rho_vol = M / (np.pi * R**2 * H)
+    def integrand(zp, rp, th):
+        loc = np.array([rp*np.cos(th), rp*np.sin(th), zp])
+        if   axis == 'z': dx_, dy_, dz_ = loc[0], loc[1], loc[2]
+        elif axis == 'x': dx_, dy_, dz_ = loc[2], loc[0], loc[1]
+        else:             dx_, dy_, dz_ = loc[1], loc[2], loc[0]
+        r = np.sqrt((x-cx-dx_)**2 + (y-cy-dy_)**2 + (z-cz-dz_)**2)
+        return -G*rho_vol*rp/r if r > 0 else 0.0
+    result, _ = integrate.nquad(integrand, [[-H/2, H/2], [0, R], [0, 2*np.pi]],
+                                opts={'limit': 50})
+    return result
+
+def scaffold_potential_mode(x, y, z, alpha):
+    V = 0.0
+    for m, A_i in zip(members, amplitudes):
+        V += cylinder_potential(x, y, z,
+                                m['dx'] + A_i*alpha, m['dy'], m['dz'],
+                                m['M'], m['R'], m['H'], m['axis'])
+    return V
+
+n_alpha  = 12;  n_zgrid = 30
+z_max_sc = max(upper1.max(), upper2.max()) + 0.5
+z_grid     = np.linspace(0.0, z_max_sc, n_zgrid)
+alpha_grid = np.linspace(-1, 1, n_alpha)
+
+print(f"\nPrecomputing scaffold V_grid ({n_alpha}×{n_zgrid}) — may take a few minutes...")
+V_grid_sc = np.zeros((n_alpha, n_zgrid))
+for i, alpha in enumerate(alpha_grid):
+    for j, zj in enumerate(z_grid):
+        V_grid_sc[i, j] = scaffold_potential_mode(0.0, 0.0, zj, alpha)
+    print(f"  alpha row {i+1}/{n_alpha}", flush=True)
+V_interp = RectBivariateSpline(alpha_grid, z_grid, V_grid_sc)
+print("V_grid done.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Scaffold: 1-D phase look-up table over initial oscillation phase phi_0
+#
+# The scaffold phase for a cycle starting at t_start depends only on
+# phi_0 = (2π f_osc t_start) mod 2π, because the arm trajectories are
+# identical every cycle.  Precompute N_lut values; interpolate for each shot.
+# ══════════════════════════════════════════════════════════════════════════════
+phi0_lut = np.linspace(0, 2*np.pi, N_lut, endpoint=False)
+phase_sc_lut = np.zeros(N_lut)
+
+print(f"\nBuilding scaffold LUT ({N_lut} points)...")
+for i, phi0 in enumerate(phi0_lut):
+    alpha_t = np.cos(2*np.pi*f_osc*t_local + phi0)
+    vu1 = V_interp.ev(alpha_t, upper1)
+    vl1 = V_interp.ev(alpha_t, lower1)
+    vu2 = V_interp.ev(alpha_t, upper2)
+    vl2 = V_interp.ev(alpha_t, lower2)
+    phase_sc_lut[i] = (m_atom/hbar)*np.trapezoid((vu1-vl1)-(vu2-vl2), t_local)
+
+# Append phi_0=2π entry for wrap-around interpolation
+phi0_ext = np.append(phi0_lut, 2*np.pi)
+lut_ext  = np.append(phase_sc_lut, phase_sc_lut[0])
+print("Scaffold LUT done.")
+
+def scaffold_phase_vec(t_starts):
+    phi0 = (2*np.pi*f_osc*np.asarray(t_starts)) % (2*np.pi)
+    return np.interp(phi0, phi0_ext, lut_ext)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Schedule: generate all cycle times, apply nighttime mask, apply failure rate
+# ══════════════════════════════════════════════════════════════════════════════
+T_span = n_days * 86400
+N_max  = int(T_span / T_cyc_lo) + 2000
+
+rng = np.random.default_rng(rng_seed)
+
+T_cycs_all   = rng.uniform(T_cyc_lo, T_cyc_hi, N_max)
+t_starts_all = np.concatenate([[0.0], np.cumsum(T_cycs_all[:-1])])
+in_span      = t_starts_all < T_span
+t_starts_all = t_starts_all[in_span]
+t_meas_all   = t_starts_all + T_fly
+# absolute seconds from Monday midnight (t=0 in run = start_hour:00 Monday)
+t_abs_all    = t_meas_all + start_hour*3600
+
+# jittered switch-on / switch-off times for each night
+jitter_s = jitter_amp_min * 60
+on_abs  = np.array([d*86400 + hour_on*3600
+                    + rng.uniform(-jitter_s, jitter_s)
+                    for d in range(n_days)])
+off_abs = np.array([(d+1)*86400 + hour_off*3600
+                    + rng.uniform(-jitter_s, jitter_s)
+                    for d in range(n_days)])
+
+active_mask = np.zeros(len(t_starts_all), dtype=bool)
+for d in range(n_days):
+    active_mask |= (t_abs_all >= on_abs[d]) & (t_abs_all < off_abs[d])
+
+t_starts_sched = t_starts_all[active_mask]
+t_meas_sched   = t_meas_all[active_mask]
+N_sched        = len(t_starts_sched)
+
+survived        = rng.random(N_sched) >= p_fail
+t_starts_active = t_starts_sched[survived]
+t_meas_active   = t_meas_sched[survived]
+N_active        = len(t_starts_active)
+
+print(f"\nSchedule: {hour_on:02d}:00 → {hour_off:02d}:00, {n_days} days, "
+      f"±{jitter_amp_min} min jitter")
+print(f"Total cycles generated : {len(t_starts_all):,}")
+print(f"Scheduled (nighttime)  : {N_sched:,}  ({100*N_sched/len(t_starts_all):.1f}%)")
+print(f"Survived (p_fail={100*p_fail:.0f}%)  : {N_active:,}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Lift events: Poisson arrivals across the full 7-day window
+# ══════════════════════════════════════════════════════════════════════════════
+lift_starts = []
+t_next = rng.exponential(lift_mean_period)
+while t_next + lift_duration < T_span - 20:
+    if t_next > 20:
+        lift_starts.append(t_next)
+    t_next += lift_duration + rng.exponential(lift_mean_period)
+lift_starts = np.array(lift_starts)
+print(f"\nLift events: {len(lift_starts)}  (mean period {lift_mean_period} s, "
+      f"duration {lift_duration:.0f} s each)")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase computation
+# ══════════════════════════════════════════════════════════════════════════════
+print(f"\nComputing {N_active:,} phases...")
+phases = np.zeros(N_active)
+
+# ULDM (vectorised over all shots)
+phases += uldm_phase_vec(t_meas_active)
+
+# Scaffold GGN (LUT look-up, vectorised)
+phases += scaffold_phase_vec(t_starts_active)
+
+# Oscillator GGN + lift (per-shot loop — fastest approach for realistic T_fly grid)
+for k in range(N_active):
+    t_abs_k = t_starts_active[k] + t_local   # run-relative absolute time
+
+    # oscillator GGN
+    h_osc = h_0 + A*np.cos(2*np.pi*f_sig*t_abs_k)
+    dphi  = ((V_osc(upper1, h_osc) - V_osc(lower1, h_osc))
+           - (V_osc(upper2, h_osc) - V_osc(lower2, h_osc)))
+
+    # lift GGN (each event that overlaps this cycle's integration window)
+    win_end = t_starts_active[k] + T_fly
+    for t_lift in lift_starts:
+        t_lift_end = t_lift + lift_duration
+        if t_lift_end > t_starts_active[k] and t_lift < win_end:
+            h_l    = np.clip(h_lift_lo + v_lift*(t_abs_k - t_lift),
+                             h_lift_lo, h_lift_hi)
+            active = (t_abs_k >= t_lift) & (t_abs_k <= t_lift_end)
+            dl = np.zeros(N_fly)
+            if active.any():
+                dl[active] = (
+                    (V_lift_fn(upper1[active], h_l[active])
+                     - V_lift_fn(lower1[active], h_l[active]))
+                  - (V_lift_fn(upper2[active], h_l[active])
+                     - V_lift_fn(lower2[active], h_l[active]))
+                )
+            dphi += dl
+
+    phases[k] += (m_atom/hbar)*np.trapezoid(dphi, t_local)
+
+    if (k+1) % 20000 == 0:
+        print(f"  {k+1:,}/{N_active:,}")
+
+print("Phase computation done.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Lomb-Scargle
+# ══════════════════════════════════════════════════════════════════════════════
+f_nyq  = 0.5 / np.median(np.diff(t_meas_active))
+f_grid = np.linspace(1/T_span, f_nyq + 0.05, 8000)
+
+print(f"\nComputing LS PSD ({len(f_grid)} frequencies, {N_active:,} shots)...")
+S_ls = ls_psd(t_meas_active, phases, f_grid)
+print("LS done.")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figures
+# ══════════════════════════════════════════════════════════════════════════════
+# Time axis: days from run start (t=0 = Monday hour_on:00)
+t_days_active = t_meas_active / 86400
+
+# Daytime gap bands: between off_abs[d] and on_abs[d+1] (relative to run start)
+gap_bands = []
+for d in range(n_days - 1):
+    gs = (off_abs[d]  - start_hour*3600) / 86400
+    ge = (on_abs[d+1] - start_hour*3600) / 86400
+    gap_bands.append((gs, ge))
+gap_bands.append(((off_abs[n_days-1] - start_hour*3600) / 86400, n_days))
+
+fig, (ax_ts, ax_ls) = plt.subplots(2, 1, figsize=(15, 9))
+
+# time series
+ax_ts.plot(t_days_active, phases*1e6, color='steelblue', lw=0.3, rasterized=True)
+for i, (g0, g1) in enumerate(gap_bands):
+    ax_ts.axvspan(g0, g1, color='lightgrey', alpha=0.55, zorder=0,
+                  label='Daytime (off)' if i == 0 else '')
+ax_ts.set_xlabel(f'Time [days from Monday {start_hour:02d}:00]', fontsize=12)
+ax_ts.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax_ts.set_title('Raw differential phase — all active shots (no denoising)', fontsize=12)
+ax_ts.set_xlim(0, n_days)
+ax_ts.legend(fontsize=10)
+ax_ts.tick_params(labelsize=10)
+
+# Lomb-Scargle
+ax_ls.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7)
+ax_ls.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+              label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
+ax_ls.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
+              label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_ls.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_ls.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_ls.set_title('Lomb-Scargle — raw (no denoising)', fontsize=12)
+ax_ls.set_xlim(0, f_nyq + 0.05)
+ax_ls.legend(fontsize=10)
+ax_ls.tick_params(labelsize=10)
+
+fig.suptitle(
+    rf'{n_days}-day nighttime run  ({hour_on:02d}:00→{hour_off:02d}:00, '
+    rf'$\pm${jitter_amp_min} min jitter)  |  '
+    rf'$T_{{\rm cyc}}\sim U({T_cyc_lo},{T_cyc_hi})$ s,  '
+    rf'$p_{{\rm fail}}={100*p_fail:.0f}$%,  '
+    rf'$N_{{\rm active}}={N_active:,}$',
+    fontsize=11
+)
+fig.tight_layout()
+
+# ── terminal summary ───────────────────────────────────────────────────────────
+mask_sig  = (f_grid >= f_sig  - 0.02) & (f_grid <= f_sig  + 0.02)
+mask_uldm = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
+print(f"\n{'='*50}")
+print(f"  GGN  peak (LS) : {np.sqrt(S_ls[mask_sig].max()):.4e} rad/sqrt(Hz)")
+print(f"  ULDM peak (LS) : {np.sqrt(S_ls[mask_uldm].max()):.4e} rad/sqrt(Hz)")
+print(f"{'='*50}")
+
+plt.show()
