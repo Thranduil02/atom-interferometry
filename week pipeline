@@ -337,11 +337,12 @@ print("Phase computation done.")
 # ══════════════════════════════════════════════════════════════════════════════
 # Denoising stage 1: excise lift-contaminated shots
 # ══════════════════════════════════════════════════════════════════════════════
+lift_pad       = 10.0   # s — padding added either side of each lift window
 win_end_active = t_starts_active + T_fly
 lift_mask = np.zeros(N_active, dtype=bool)   # True = contaminated by a lift event
 for t_lift in lift_starts:
     t_lift_end = t_lift + lift_duration
-    lift_mask |= (t_lift_end > t_starts_active) & (t_lift < win_end_active)
+    lift_mask |= (t_lift_end + lift_pad > t_starts_active) & (t_lift - lift_pad < win_end_active)
 
 keep = ~lift_mask
 N_excised = (~keep).sum()
@@ -368,19 +369,17 @@ print("LS (excised) done.")
 # ══════════════════════════════════════════════════════════════════════════════
 # Denoising stage 2: least-squares notch at one or more frequencies
 # ══════════════════════════════════════════════════════════════════════════════
-notch_freqs = [f_sig]   # Hz — edit this list to notch additional/different lines
+notch_freqs = [f_sig]   # Hz — add more frequencies to notch them in turn, one at a time
 
-A_notch = np.column_stack([
-    fn(2*np.pi*f_n*t_meas_excised)
-    for f_n in notch_freqs
-    for fn in (np.cos, np.sin)
-])
-coeffs, _, _, _ = np.linalg.lstsq(A_notch, phases_excised, rcond=None)
-phases_notched  = phases_excised - A_notch @ coeffs
-
+phases_notched = phases_excised.copy()
 print()
-for i, f_n in enumerate(notch_freqs):
-    amp = np.hypot(coeffs[2*i], coeffs[2*i+1])
+for f_n in notch_freqs:
+    omega_n = 2*np.pi*f_n
+    A_notch = np.column_stack([np.cos(omega_n*t_meas_excised),
+                                np.sin(omega_n*t_meas_excised)])
+    coeffs, _, _, _ = np.linalg.lstsq(A_notch, phases_notched, rcond=None)
+    phases_notched  = phases_notched - A_notch @ coeffs
+    amp = np.hypot(coeffs[0], coeffs[1])
     print(f"Notch fit at f={f_n} Hz: amplitude = {amp*1e6:.4f} µrad")
 
 print(f"\nComputing LS PSD ({len(f_grid)} frequencies, {len(t_meas_excised):,} shots, notched)...")
@@ -428,20 +427,15 @@ ax_ts1.set_xlim(0, n_days)
 ax_ts1.legend(fontsize=10)
 ax_ts1.tick_params(labelsize=10)
 
-ax_ls1.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7, alpha=0.4,
+ax_ls1.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7,
             label=f'Raw ($N={N_active:,}$)')
-ax_ls1.plot(f_grid, np.sqrt(S_ls_excised), color='darkorange', lw=0.7, alpha=0.7,
-            label=f'Lift-excised ($N={len(t_meas_excised):,}$)')
-ax_ls1.plot(f_grid, np.sqrt(S_ls_notched), color='darkorchid', lw=0.9,
-            label=f'Notched at {notch_label} Hz ($N={len(t_meas_excised):,}$)')
-for j, f_n in enumerate(notch_freqs):
-    ax_ls1.axvline(f_n, ls='--', color='k', lw=1.2,
-                   label=rf'$f_{{\rm notch}} = {f_n}$ Hz' if j == 0 else None)
+ax_ls1.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+               label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
 ax_ls1.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
                label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
 ax_ls1.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_ls1.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_ls1.set_title('Lomb-Scargle — raw vs. lift-excised (stage 1) vs. notched (stage 2)', fontsize=12)
+ax_ls1.set_title('Lomb-Scargle — raw (no denoising)', fontsize=12)
 ax_ls1.set_xlim(0, f_nyq + 0.05)
 ax_ls1.legend(fontsize=9)
 ax_ls1.tick_params(labelsize=10)
@@ -464,8 +458,6 @@ ax_ts2.set_xlim(0, n_days)
 ax_ts2.legend(fontsize=10)
 ax_ts2.tick_params(labelsize=10)
 
-ax_ls2.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.7, alpha=0.4,
-            label=f'Raw ($N={N_active:,}$)')
 ax_ls2.plot(f_grid, np.sqrt(S_ls_excised), color='darkorange', lw=0.9,
             label=f'Lift-excised ($N={len(t_meas_excised):,}$)')
 ax_ls2.axvline(f_sig,  ls='--', color='k',        lw=1.2,
@@ -474,7 +466,7 @@ ax_ls2.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
                label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
 ax_ls2.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_ls2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_ls2.set_title('Lomb-Scargle — raw vs. lift-excised (stage 1)', fontsize=12)
+ax_ls2.set_title('Lomb-Scargle — post lift-excision (stage 1)', fontsize=12)
 ax_ls2.set_xlim(0, f_nyq + 0.05)
 ax_ls2.legend(fontsize=9)
 ax_ls2.tick_params(labelsize=10)
@@ -497,8 +489,6 @@ ax_ts3.set_xlim(0, n_days)
 ax_ts3.legend(fontsize=10)
 ax_ts3.tick_params(labelsize=10)
 
-ax_ls3.plot(f_grid, np.sqrt(S_ls_excised), color='darkorange', lw=0.7, alpha=0.4,
-            label=f'Lift-excised ($N={len(t_meas_excised):,}$)')
 ax_ls3.plot(f_grid, np.sqrt(S_ls_notched), color='darkorchid', lw=0.9,
             label=f'Notched ($N={len(t_meas_excised):,}$)')
 for j, f_n in enumerate(notch_freqs):
@@ -508,7 +498,7 @@ ax_ls3.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
                label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
 ax_ls3.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_ls3.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_ls3.set_title('Lomb-Scargle — lift-excised vs. notched (stage 2)', fontsize=12)
+ax_ls3.set_title('Lomb-Scargle — post notch filtration (stage 2)', fontsize=12)
 ax_ls3.set_xlim(0, f_nyq + 0.05)
 ax_ls3.legend(fontsize=9)
 ax_ls3.tick_params(labelsize=10)
