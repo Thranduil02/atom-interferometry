@@ -23,11 +23,11 @@ lift_pad         = 10.0   # s – padding either side of each lift window
 rng_seed         = 42
 
 # ── MOT failures ──────────────────────────────────────────────────────────────
-enable_failures = False    # set False to disable shot failures entirely
+enable_failures = True    # set False to disable shot failures entirely
 p_fail          = 0.01    # probability that any given shot fails
 
 # ── cycle timing jitter ────────────────────────────────────────────────────────
-enable_jitter   = False    # set False for perfectly uniform cycle grid
+enable_jitter   = True    # set False for perfectly uniform cycle grid
 cycle_jitter    = 0.1     # ± s — uniform random offset applied to each shot start
 
 # ── physical constants ─────────────────────────────────────────────────────────

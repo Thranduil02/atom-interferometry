@@ -1,0 +1,225 @@
+# -*- coding: utf-8 -*-
+"""
+ULDM signal with random lift transients: excision and Lomb-Scargle recovery.
+
+No GGN oscillator — just ULDM + lift noise.
+Lift events arrive as a Poisson process (~once per 15 min).
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── parameters ─────────────────────────────────────────────────────────────────
+T_total          = 3 * 3600    # s  (3 hours)
+T_cyc            = 2.0         # s  cycle time
+lift_mean_period = 15 * 60     # s  mean gap between lift events (Poisson)
+
+lift_pad         = 10.0        # s  padding excised either side of each transit
+rng_seed         = 42
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81
+
+# lift geometry
+M_lift      = 1000     # kg
+D_lift      = 10.0     # m  horizontal distance from atom axis
+h_lift_lo   = -10.0    # m  bottom of travel
+h_lift_hi   =  20.0    # m  top of travel
+v_lift      =   1.0    # m/s
+lift_duration = (h_lift_hi - h_lift_lo) / v_lift   # 30 s
+
+# interferometer
+u0 = 3.86;  dt = 0.01;  T = 0.73
+T_fly = 2 * T
+N_fly = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+# ── ULDM ───────────────────────────────────────────────────────────────────────
+G_nat = 6.708e-39;  d_e = 1;  d_m_e = 1
+m_phi = 4e-16;  rho_phi = 0.3;  f_uldm = 0.1
+theta = np.pi / 2;  xi = 0.06;  omega_A = 2.67e15
+L_base = 10;  delta_r = 5;  n_lmt = 1000;  conv_factor = 2.77e-12
+
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4*np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * 3e8))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / 3e8) / 2)
+            * np.sin(omega_phi * T / 2)
+            * np.cos(omega_phi * ((T_fly + L_base/3e8) / 2 + t) + theta))
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor), v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V_lift(z, h):
+    return -G * M_lift / np.sqrt(D_lift**2 + (z - h)**2)
+
+lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
+
+# ── Poisson lift start times ───────────────────────────────────────────────────
+rng = np.random.default_rng(rng_seed)
+
+lift_starts = []
+t_next = rng.exponential(lift_mean_period)
+while t_next + lift_duration < T_total - 20:
+    if t_next > 20:
+        lift_starts.append(t_next)
+    t_next += lift_duration + rng.exponential(lift_mean_period)
+lift_starts = np.array(lift_starts)
+
+print(f"Lift events:     {len(lift_starts)}")
+print(f"Lift duration:   {lift_duration:.0f} s  (+{lift_pad:.0f} s padding each side)")
+print(f"Mean gap:        {np.diff(lift_starts).mean():.0f} s  (target {lift_mean_period} s)")
+
+# ── compute phases ─────────────────────────────────────────────────────────────
+N_cyc      = int(T_total / T_cyc)
+t_starts   = np.arange(N_cyc) * T_cyc
+t_meas_all = t_starts + T_fly
+
+# ULDM contribution (vectorized)
+phases = uldm_phase_vec(t_meas_all)
+
+# Lift contribution (only for cycles that overlap a lift transit)
+for k in range(N_cyc):
+    t_abs = t_starts[k] + t_local
+    for t_lift in lift_starts:
+        t_lift_end = t_lift + lift_duration
+        if t_lift_end <= t_starts[k] or t_lift >= t_starts[k] + T_fly:
+            continue
+        h_l    = np.clip(h_lift_lo + v_lift * (t_abs - t_lift), h_lift_lo, h_lift_hi)
+        active = (t_abs >= t_lift) & (t_abs <= t_lift_end)
+        dl = np.zeros(N_fly)
+        dl[active] = ((V_lift(upper1[active], h_l[active]) - V_lift(lower1[active], h_l[active]))
+                    - (V_lift(upper2[active], h_l[active]) - V_lift(lower2[active], h_l[active])))
+        phases[k] += (m_atom / hbar) * np.trapezoid(dl, t_local)
+
+# ── excision ───────────────────────────────────────────────────────────────────
+lift_mask = np.zeros(N_cyc, dtype=bool)
+for t_lift in lift_starts:
+    lift_mask |= ((t_meas_all >= t_lift - lift_pad) &
+                  (t_meas_all <= t_lift + lift_duration + lift_pad))
+
+t_clean = t_meas_all[~lift_mask]
+y_clean = phases[~lift_mask]
+N_clean = len(t_clean)
+
+print(f"\nTotal cycles:    {N_cyc:,}")
+print(f"Contaminated:    {lift_mask.sum():,}  ({100*lift_mask.sum()/N_cyc:.1f}%)")
+print(f"Retained:        {N_clean:,}  ({100*N_clean/N_cyc:.1f}%)")
+
+# ── LS helper ──────────────────────────────────────────────────────────────────
+def ls_psd(t, y, freqs, chunk=128):
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w  = 2*np.pi*freqs[i:i+chunk]
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2*w)
+        sh  = wt - (w*tau)[:,None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C = ct@y;  S = st@y
+        CC = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff * 0.5 * (C**2/CC + S**2/SS)
+    return out
+
+f_grid = np.linspace(1/T_total, 0.49/T_cyc, 6000)
+
+print("Computing LS (raw)...")
+S_raw  = ls_psd(t_meas_all, phases, f_grid)
+print("Computing LS (clean)...")
+S_clean = ls_psd(t_clean, y_clean, f_grid)
+
+# ── Figure 1: time series ──────────────────────────────────────────────────────
+# Top: full run; Bottom: zoom on the first lift event
+t_h = t_meas_all / 3600   # hours
+
+fig1, (ax_full, ax_zoom) = plt.subplots(2, 1, figsize=(14, 8))
+fig1.suptitle(f'ULDM + lift transients  —  {T_total/3600:.0f} h run,  '
+              f'{len(lift_starts)} lifts (~1 per {lift_mean_period//60} min)', fontsize=13)
+
+# full run panel
+ax_full.plot(t_h, phases * 1e6, color='lightsteelblue', lw=0.5, zorder=1, label='All data')
+
+t_retained = t_h.copy()
+y_retained = phases.copy()
+t_retained[lift_mask] = np.nan
+y_retained[lift_mask] = np.nan
+ax_full.plot(t_retained, y_retained * 1e6, color='steelblue', lw=0.6, zorder=2, label='Retained')
+
+for i, t_lift in enumerate(lift_starts):
+    ax_full.axvspan((t_lift - lift_pad) / 3600,
+                    (t_lift + lift_duration + lift_pad) / 3600,
+                    alpha=0.25, color='firebrick',
+                    label='Excised window' if i == 0 else '')
+
+ax_full.set_xlabel('Time [h]', fontsize=12)
+ax_full.set_ylabel(r'$\Delta\Phi$ [$\mu$rad]', fontsize=12)
+ax_full.set_title('Full time series', fontsize=12)
+ax_full.set_xlim(0, T_total / 3600)
+ax_full.legend(fontsize=10, loc='upper right')
+
+# zoom on first lift
+t_z0 = lift_starts[0]
+z_margin = 80   # s
+mask_z = (t_meas_all >= t_z0 - z_margin) & (t_meas_all <= t_z0 + lift_duration + z_margin)
+t_z = t_meas_all[mask_z]
+y_z = phases[mask_z]
+ax_zoom.plot(t_z, y_z * 1e6, color='steelblue', lw=0.8)
+ax_zoom.axvspan(t_z0 - lift_pad, t_z0 + lift_duration + lift_pad,
+                alpha=0.25, color='firebrick', label='Excised (incl. padding)')
+ax_zoom.axvspan(t_z0, t_z0 + lift_duration,
+                alpha=0.15, color='darkorange', label='Lift transit')
+ax_zoom.set_xlabel('Time [s]', fontsize=12)
+ax_zoom.set_ylabel(r'$\Delta\Phi$ [$\mu$rad]', fontsize=12)
+ax_zoom.set_title(f'Zoom: first lift event  (t = {t_z0:.0f} s)', fontsize=12)
+ax_zoom.legend(fontsize=10)
+
+fig1.tight_layout()
+
+# ── Figure 2: periodograms ─────────────────────────────────────────────────────
+fig2, (ax_raw, ax_exc) = plt.subplots(2, 1, figsize=(14, 8))
+fig2.suptitle('Lomb–Scargle periodogram — before and after lift excision', fontsize=13)
+
+ax_raw.plot(f_grid, np.sqrt(S_raw), color='steelblue', lw=0.8)
+ax_raw.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_raw.set_title('All data (lift-contaminated)', fontsize=12)
+ax_raw.set_xlim(f_grid[0], f_grid[-1])
+
+ax_exc.plot(f_grid, np.sqrt(S_clean), color='seagreen', lw=0.8)
+ax_exc.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_exc.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_exc.set_title(f'After excision  ({N_clean:,} retained cycles,  {100*N_clean/N_cyc:.0f}%)', fontsize=12)
+ax_exc.set_xlim(f_grid[0], f_grid[-1])
+
+fig2.tight_layout()
+
+# ── print peak recovery ────────────────────────────────────────────────────────
+near_uldm = (f_grid >= f_uldm - 0.02) & (f_grid <= f_uldm + 0.02)
+print(f"\nULDM peak (raw LS):   {np.sqrt(S_raw[near_uldm].max()):.4e} rad/√Hz")
+print(f"ULDM peak (clean LS): {np.sqrt(S_clean[near_uldm].max()):.4e} rad/√Hz")
+
+plt.show()

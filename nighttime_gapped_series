@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-One week of data with daily gaps (nighttime shutdown).
+One week of data with daily gaps (daytime shutdown).
 
 Schedule (all times as hours, 24h clock):
-  Device ON  from hour_on  to midnight  (e.g. 08:00 – 24:00)
-  Device OFF from midnight to hour_on   (e.g. 00:00 – 08:00)
-  First day starts at start_hour        (e.g. Monday 09:00)
+  Device ON  from hour_on  (evening) to hour_off next morning
+  Device OFF from hour_off to hour_on (daytime gap)
+  First day starts at start_hour (e.g. Monday 09:00)
 
 """
 import numpy as np
@@ -13,13 +13,13 @@ import matplotlib.pyplot as plt
 
 # ── adjustable schedule ────────────────────────────────────────────────────────
 T_cyc       = 2.0     # cycle time [s]
-hour_on     = 8       # daily switch-on hour (24h clock)
-hour_off    = 24      # daily switch-off hour (midnight = 24)
+hour_on     = 18      # daily switch-on hour, evening (24h clock)
+hour_off    = 8       # daily switch-off hour, next morning (24h clock)
 start_hour  = 9       # first shot hour on Monday
 n_days      = 7       # number of days
 
 # ── physics parameters ─────────────────────────────────────────────────────────
-d_e = 1;  d_m_e = 1
+d_e = 0.1;  d_m_e = 0.1
 m_atom = 1.46e-25;  hbar = 1.055e-34
 v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
 G = 6.67e-11;  g = 9.81;  M = 1;  h_0 = 1;  D_0 = 5;  A = 1
@@ -91,6 +91,10 @@ f_grid = np.linspace(1/T_span_total, f_nyq + 0.05, 8000)
 lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
 lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
 
+# ── derived schedule quantities ────────────────────────────────────────────────
+active_h = 24 - hour_on + hour_off   # e.g. 14 h
+off_h    = hour_on - hour_off        # e.g. 10 h
+
 # ── plot helper ────────────────────────────────────────────────────────────────
 def make_figure(suptitle, t_meas_active, phases, gap_bands, S_ls, ls_subtitle=''):
     """
@@ -134,16 +138,17 @@ def make_figure(suptitle, t_meas_active, phases, gap_bands, S_ls, ls_subtitle=''
 # Part 1: uniform nighttime — fixed on/off times every day
 # ════════════════════════════════════════════════════════════════════════════════
 def is_active(t_meas):
+    # Active window crosses midnight: ON at hour_on, OFF at hour_off next morning
     tod = (t_meas + start_hour * 3600) % 86400
-    return (tod >= hour_on * 3600) & (tod < hour_off * 3600)
+    return (tod >= hour_on * 3600) | (tod < hour_off * 3600)
 
 active          = is_active(t_meas_all)
 t_starts_active = t_starts_all[active]
 t_meas_active   = t_meas_all[active]
 N_active        = len(t_meas_active)
 
-print(f"Schedule: ON {hour_on:02d}:00 – {hour_off % 24:02d}:00  "
-      f"({hour_off-hour_on}h active, {hour_on}h off per day)")
+print(f"Schedule: ON {hour_on:02d}:00 – {hour_off:02d}:00 (next day)  "
+      f"({active_h}h active, {off_h}h off per day)")
 print(f"Start: Monday {start_hour:02d}:00")
 print(f"Total grid shots : {N_grid:,}")
 print(f"Active shots     : {N_active:,}  ({100*N_active/N_grid:.1f}%)")
@@ -164,17 +169,17 @@ for i in range(N_active):
 print("Computing LS...")
 S_ls = ls_psd(t_meas_active, phases, f_grid)
 
-# gap bands: night d runs from hour_off on day d to hour_on on day d+1
+# daytime gap on each calendar day: hour_off (morning) → hour_on (evening)
 gap_bands1 = []
 for d in range(n_days):
     gs_abs = d * 86400 + hour_off * 3600
-    ge_abs = (d+1) * 86400 + hour_on * 3600
+    ge_abs = d * 86400 + hour_on  * 3600
     gap_bands1.append(((gs_abs - start_hour*3600) / 86400,
                         (ge_abs - start_hour*3600) / 86400))
 
 make_figure(
-    suptitle=(f'{n_days}-day run: ON {hour_on:02d}:00–{hour_off%24:02d}:00 '
-              f'({hour_off-hour_on}h/day active), start Monday {start_hour:02d}:00  |  '
+    suptitle=(f'{n_days}-day run: ON {hour_on:02d}:00–{hour_off:02d}:00 (nighttime, '
+              f'{active_h}h/night active), start Monday {start_hour:02d}:00  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active:,}$'),
     t_meas_active=t_meas_active, phases=phases, gap_bands=gap_bands1,
     S_ls=S_ls, ls_subtitle='(handles gaps correctly)',
@@ -191,17 +196,15 @@ print(f"  ULDM peak (LS): "
 rng2     = np.random.default_rng(123)
 jitter_s = 30 * 60   # ±30 min in seconds
 
-on_times2  = hour_on  * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days)
-off_times2 = np.clip(hour_off * 3600 + rng2.uniform(-jitter_s, jitter_s, n_days),
-                     None, 86400)
-
-day_idx_all = (t_abs_all // 86400).astype(int)
-tod_all     = t_abs_all % 86400
+# on_times2: evening start of night d; off_times2: morning end (day d+1)
+on_times2  = np.array([d * 86400 + hour_on  * 3600 + start_hour * 3600
+                        + rng2.uniform(-jitter_s, jitter_s) for d in range(n_days)])
+off_times2 = np.array([(d+1) * 86400 + hour_off * 3600 + start_hour * 3600
+                        + rng2.uniform(-jitter_s, jitter_s) for d in range(n_days)])
 
 active2 = np.zeros(N_grid, dtype=bool)
 for d in range(n_days):
-    active2 |= ((day_idx_all == d) & (tod_all >= on_times2[d])
-                                    & (tod_all <  off_times2[d]))
+    active2 |= (t_abs_all >= on_times2[d]) & (t_abs_all < off_times2[d])
 
 t_starts_active2 = t_starts_all[active2]
 t_meas_active2   = t_meas_all[active2]
@@ -226,22 +229,21 @@ for i in range(N_active2):
 print("Computing LS...")
 S_ls2 = ls_psd(t_meas_active2, phases2, f_grid)
 
-# gap bands: one inter-day interval per night
+# daytime gap between consecutive nights: off_times2[d] (morning) → on_times2[d+1] (evening)
 gap_bands2 = []
 for d in range(n_days - 1):
-    gs_abs = d * 86400 + off_times2[d]
-    ge_abs = (d+1) * 86400 + on_times2[d+1]
+    gs_abs = off_times2[d]
+    ge_abs = on_times2[d + 1]
     gap_bands2.append(((gs_abs - start_hour*3600) / 86400,
                         (ge_abs - start_hour*3600) / 86400))
-# last shutdown (no next morning to bound it — shade to edge of plot)
-gs_abs = (n_days-1) * 86400 + off_times2[n_days-1]
+gs_abs = off_times2[-1]
 gap_bands2.append(((gs_abs - start_hour*3600) / 86400, n_days))
 
 make_figure(
-    suptitle=(f'{n_days}-day run, ±30 min on/off jitter  |  '
+    suptitle=(f'{n_days}-day run, ±30 min on/off jitter (nighttime)  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active2:,}$'),
     t_meas_active=t_meas_active2, phases=phases2, gap_bands=gap_bands2,
-    S_ls=S_ls2, ls_subtitle='(still recovers both peaks correctly)',
+    S_ls=S_ls2,
 )
 
 print(f"\n  GGN peak  (LS, jittered): "
@@ -253,13 +255,12 @@ print(f"  ULDM peak (LS, jittered): "
 # Part 3: variable gap lengths and start times each night
 # ════════════════════════════════════════════════════════════════════════════════
 rng3 = np.random.default_rng(456)
-# shutdown start: anywhere 20:00–02:00 (expressed as hours from midnight, so 20–26)
-# duration: 4–12 hours; turn-on = start + duration
-off_hours3 = rng3.uniform(20, 26, n_days)
-dur_hours3 = rng3.uniform(4,  12, n_days)
+# daytime shutdown: turns off somewhere 06:00–10:00, duration 8–14 h
+off_hours3 = rng3.uniform(6,  10, n_days)
+dur_hours3 = rng3.uniform(8,  14, n_days)
 on_hours3  = off_hours3 + dur_hours3
 
-# absolute seconds from Monday midnight for each gap
+# absolute seconds from Monday midnight for each daytime gap
 gap_starts3_abs = np.array([d * 86400 + off_hours3[d] * 3600 for d in range(n_days)])
 gap_ends3_abs   = np.array([d * 86400 + on_hours3[d]  * 3600 for d in range(n_days)])
 
@@ -274,7 +275,7 @@ N_active3        = len(t_meas_active3)
 print(f"\nVariable gap schedule: {N_active3:,} active shots  "
       f"({100*N_active3/N_grid:.1f}%)")
 for d in range(n_days):
-    print(f"  Night {d}: off {off_hours3[d]%24:.1f}h, "
+    print(f"  Day {d}: off {off_hours3[d]:.1f}h, "
           f"on {on_hours3[d]%24:.1f}h  (duration {dur_hours3[d]:.1f}h)")
 
 phases3  = np.zeros(N_active3)
@@ -297,7 +298,7 @@ gap_bands3 = [((gs - start_hour*3600) / 86400, (ge - start_hour*3600) / 86400)
               for gs, ge in zip(gap_starts3_abs, gap_ends3_abs)]
 
 make_figure(
-    suptitle=(f'{n_days}-day run, variable shutdowns (4–12 h, start 20:00–02:00)  |  '
+    suptitle=(f'{n_days}-day run, variable daytime shutdowns (8–14 h, start 06:00–10:00)  |  '
               f'$T_{{\\rm cyc}}={T_cyc}$ s,  $N_{{\\rm active}}={N_active3:,}$'),
     t_meas_active=t_meas_active3, phases=phases3, gap_bands=gap_bands3,
     S_ls=S_ls3, ls_subtitle='(correctly recovers both peaks)',
