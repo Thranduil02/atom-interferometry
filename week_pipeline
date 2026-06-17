@@ -1,0 +1,371 @@
+"""
+Lift excision and Lomb-Scargle recovery with nighttime-only operation.
+
+A 7-day run with the interferometer active only during nighttime (18:00–08:00),
+with ±30 min jitter on the switch-on and switch-off times each night.
+
+GGN source: point-mass oscillator at f_sig = 0.12 Hz.
+Lift-mass transients are excised with padding; the remainder is analysed with
+Lomb-Scargle, then a least-squares notch at f_sig removes the GGN signal to
+recover the ULDM peak at 0.1 Hz.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── user-editable parameters ───────────────────────────────────────────────────
+n_days           = 7
+hour_evening     = 18     # device turns ON each evening (24h clock)
+hour_morning     = 8      # device turns OFF each morning (24h clock)
+jitter_min       = 30     # ±jitter on on/off times [minutes]
+lift_mean_period = 3600   # s – average time between lift events (~once/hour)
+lift_pad         = 10.0   # s – padding either side of each lift window
+rng_seed         = 42
+
+# ── MOT failures ──────────────────────────────────────────────────────────────
+enable_failures = False    # set False to disable shot failures entirely
+p_fail          = 0.01    # probability that any given shot fails
+
+# ── cycle timing jitter ────────────────────────────────────────────────────────
+enable_jitter   = False    # set False for perfectly uniform cycle grid
+cycle_jitter    = 0.1     # ± s — uniform random offset applied to each shot start
+
+# ── physical constants ─────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81
+
+# oscillator GGN source
+M_osc = 1;  h_0 = 1;  D_0 = 5;  A = 1;  f_sig = 0.12
+
+# lift parameters
+M_lift = 1000;  D_lift = 10
+h_lift_lo = -10;  h_lift_hi = 20;  v_lift = 2.0
+lift_duration = (h_lift_hi - h_lift_lo) / v_lift   # 30 s
+
+u0 = 3.86;  dt = 0.01;  T = 0.73;  T_cyc = 2.0
+T_fly = 2 * T;  N_fly = int(round(T_fly / dt));  t_local = np.arange(N_fly) * dt
+
+# ── ULDM parameters ───────────────────────────────────────────────────────────
+G_nat       = 6.708e-39
+d_e         = 1
+d_m_e       = 1
+m_phi       = 4e-16
+rho_phi     = 0.3
+f_uldm      = 0.1
+theta       = np.pi / 2
+xi          = 0.06
+omega_A     = 2.67e15
+L_base      = 10
+delta_r     = 5
+n_lmt       = 1000
+conv_factor = 2.77e-12
+
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * 3e8))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / 3e8) / 2)
+            * np.sin(omega_phi * T / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / 3e8) / 2 + t) + theta))
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _ = atom_path(p1[-1] if len(p1) else float(floor), v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V_osc(z, h):
+    return -G * M_osc  / np.sqrt(D_0**2    + (z - h)**2)
+
+def V_lift(z, h):
+    return -G * M_lift / np.sqrt(D_lift**2 + (z - h)**2)
+
+# ── pre-compute arm positions ──────────────────────────────────────────────────
+lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
+
+# ── shared time grid (absolute seconds from Monday midnight) ──────────────────
+T_span_total = n_days * 86400
+N_grid       = int(T_span_total / T_cyc)
+t_starts_all = np.arange(N_grid) * T_cyc
+if enable_jitter:
+    rng_jitter   = np.random.default_rng(rng_seed + 2)
+    t_starts_all = t_starts_all + rng_jitter.uniform(-cycle_jitter, cycle_jitter, N_grid)
+t_meas_all   = t_starts_all + T_fly
+
+# ── jittered nighttime schedule ───────────────────────────────────────────────
+rng      = np.random.default_rng(rng_seed)
+jitter_s = jitter_min * 60
+
+on_times  = np.array([d * 86400 + hour_evening * 3600
+                      + rng.uniform(-jitter_s, jitter_s) for d in range(n_days)])
+off_times = np.array([(d + 1) * 86400 + hour_morning * 3600
+                      + rng.uniform(-jitter_s, jitter_s) for d in range(n_days)])
+
+active = np.zeros(N_grid, dtype=bool)
+for d in range(n_days):
+    active |= (t_meas_all >= on_times[d]) & (t_meas_all < off_times[d])
+
+# ── MOT shot failures ─────────────────────────────────────────────────────────
+mot_ok = np.ones(N_grid, dtype=bool)
+if enable_failures:
+    mot_ok = rng.random(N_grid) >= p_fail
+    active &= mot_ok
+
+t_starts_active = t_starts_all[active]
+t_meas_active   = t_meas_all[active]
+N_active        = len(t_meas_active)
+
+active_hrs = hour_morning + 24 - hour_evening
+_n_night = sum(((t_meas_all >= on_times[d]) & (t_meas_all < off_times[d])).sum()
+               for d in range(n_days))
+print(f"Schedule: ON ~{hour_evening:02d}:00 – {hour_morning:02d}:00  "
+      f"(~{active_hrs}h/night, ±{jitter_min} min jitter)")
+if enable_jitter:
+    print(f"Cycle jitter     : ±{cycle_jitter} s (uniform)")
+print(f"Total grid shots : {N_grid:,}")
+print(f"After nighttime  : {_n_night:,}  ({100*_n_night/N_grid:.1f}%)")
+if enable_failures:
+    print(f"After failures   : {N_active:,}  ({100*N_active/N_grid:.1f}%,"
+          f" p_fail={p_fail:.1%})")
+else:
+    print(f"Active shots     : {N_active:,}  ({100*N_active/N_grid:.1f}%)")
+
+# ── random lift start times (Poisson process over full 7-day span) ────────────
+rng2 = np.random.default_rng(rng_seed + 1)
+lift_starts = []
+t_next = rng2.exponential(lift_mean_period)
+while t_next + lift_duration < T_span_total - 20:
+    if t_next > 20:
+        lift_starts.append(t_next)
+    t_next += lift_duration + rng2.exponential(lift_mean_period)
+lift_starts = np.array(lift_starts)
+
+print(f"Lift events      : {len(lift_starts)}  (mean period {lift_mean_period} s, "
+      f"duration {lift_duration:.0f} s)")
+
+# ── compute phases for active cycles ──────────────────────────────────────────
+phases    = np.zeros(N_active)
+lift_mask = np.zeros(N_active, dtype=bool)
+
+phases += uldm_phase_vec(t_meas_active)
+
+print(f"\nComputing {N_active:,} phases...")
+for i in range(N_active):
+    t_start = t_starts_active[i]
+    t_abs   = t_start + t_local
+
+    # oscillator GGN
+    h_osc = h_0 + A * np.cos(2 * np.pi * f_sig * t_abs)
+    dphi  = (V_osc(upper1, h_osc) - V_osc(lower1, h_osc)) \
+          - (V_osc(upper2, h_osc) - V_osc(lower2, h_osc))
+
+    # lift contribution — pre-filter to overlapping events only
+    nearby = lift_starts[(lift_starts < t_start + T_fly) &
+                         (lift_starts + lift_duration > t_start)]
+    for t_lift in nearby:
+        t_lift_end = t_lift + lift_duration
+        h_l      = np.clip(h_lift_lo + v_lift * (t_abs - t_lift), h_lift_lo, h_lift_hi)
+        active_l = (t_abs >= t_lift) & (t_abs <= t_lift_end)
+        dl       = np.zeros(N_fly)
+        dl[active_l] = (
+            (V_lift(upper1[active_l], h_l[active_l]) - V_lift(lower1[active_l], h_l[active_l])) -
+            (V_lift(upper2[active_l], h_l[active_l]) - V_lift(lower2[active_l], h_l[active_l]))
+        )
+        dphi += dl
+
+    phases[i] += (m_atom / hbar) * np.trapezoid(dphi, t_local)
+    if (i + 1) % 20000 == 0:
+        print(f"  {i+1:,}/{N_active:,}")
+
+# ── excise lift-contaminated active cycles ────────────────────────────────────
+for t_lift in lift_starts:
+    t_lift_end = t_lift + lift_duration
+    lift_mask |= ((t_meas_active >= t_lift - lift_pad) &
+                  (t_meas_active <= t_lift_end + lift_pad))
+
+t_clean        = t_meas_active[~lift_mask]
+t_starts_clean = t_starts_active[~lift_mask]
+y_clean        = phases[~lift_mask]
+N_clean        = len(t_clean)
+
+print(f"\nActive cycles:      {N_active:,}")
+print(f"Contaminated:       {lift_mask.sum():,}")
+print(f"Retained:           {N_clean:,}")
+
+# ── frequency grid ─────────────────────────────────────────────────────────────
+f_nyq  = 0.5 / T_cyc
+f_grid = np.linspace(1 / T_span_total, f_nyq, 6000)
+
+# ── Lomb-Scargle PSD (chunked for memory efficiency) ──────────────────────────
+def ls_psd(t, y, freqs, chunk=64):
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w   = 2 * np.pi * freqs[i:i+chunk]
+        wt  = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
+        sh  = wt - (w * tau)[:, None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct @ y;  S  = st @ y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff * 0.5 * (C**2 / CC + S**2 / SS)
+    return out
+
+# ── Stage 1: LS on post-excision data ─────────────────────────────────────────
+print("\nComputing LS (all active, pre-excision)...")
+S_ls_full = ls_psd(t_meas_active, phases, f_grid)
+
+print("Computing LS (post-excision)...")
+S_ls = ls_psd(t_clean, y_clean, f_grid)
+
+# ── Stage 2: least-squares notch at f_sig and 2*f_sig ────────────────────────
+# Basis vectors use shot start times (t_starts_clean) not measurement times:
+# GGN phase is accumulated from t_start, so signal phase is 2π f t_start.
+omega_sig  = 2 * np.pi * f_sig
+omega_sig2 = 2 * np.pi * 2 * f_sig
+A_notch    = np.column_stack([np.cos(omega_sig  * t_starts_clean),
+                               np.sin(omega_sig  * t_starts_clean),
+                               np.cos(omega_sig2 * t_starts_clean),
+                               np.sin(omega_sig2 * t_starts_clean)])
+coeffs, _, _, _ = np.linalg.lstsq(A_notch, y_clean, rcond=None)
+y_notched = y_clean - A_notch @ coeffs
+
+# ── Stage 3: LS on notched residuals ─────────────────────────────────────────
+print("Computing LS (post-notch)...")
+S_ls_notched = ls_psd(t_clean, y_notched, f_grid)
+
+# ── true ULDM signal on a fine time grid ──────────────────────────────────────
+t_fine = np.linspace(t_clean[0], t_clean[-1], 5000)
+y_true = uldm_phase_vec(t_fine)
+
+# ── daytime gap bands for plots ────────────────────────────────────────────────
+gap_bands = []
+if on_times[0] > 0:
+    gap_bands.append((0.0, on_times[0] / 86400))
+for d in range(n_days - 1):
+    gap_bands.append((off_times[d] / 86400, on_times[d + 1] / 86400))
+gap_bands.append((off_times[-1] / 86400, n_days))
+
+def add_gap_shading(ax):
+    for i, (g0, g1) in enumerate(gap_bands):
+        ax.axvspan(g0, g1, color='lightgrey', alpha=0.6, zorder=0,
+                   label='Daytime (off)' if i == 0 else '')
+
+# ── Figure 1: all active data — time series + LS (lift contamination visible) ─
+fig1, (ax_t, ax_f) = plt.subplots(2, 1, figsize=(15, 8))
+
+t_days_active = t_meas_active / 86400
+ax_t.plot(t_days_active, phases * 1e6, color='steelblue', lw=0.4, rasterized=True, zorder=2)
+add_gap_shading(ax_t)
+for i, t_lift in enumerate(lift_starts):
+    ax_t.axvspan((t_lift - lift_pad) / 86400,
+                 (t_lift + lift_duration + lift_pad) / 86400,
+                 alpha=0.20, color='firebrick',
+                 label='Lift active (+ pad)' if i == 0 else '')
+ax_t.set_xlabel('Time [days from Monday 00:00]', fontsize=12)
+ax_t.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax_t.set_title('Before pipeline: nighttime active data — phase time series', fontsize=12)
+ax_t.set_xlim(0, n_days)
+ax_t.legend(fontsize=10)
+ax_t.tick_params(labelsize=10)
+
+ax_f.plot(f_grid, np.sqrt(S_ls_full), color='steelblue', lw=1.2)
+ax_f.axvline(f_sig,  ls='--', color='k',       lw=1.2, label=rf'$f_{{\rm sig}} = {f_sig}$ Hz')
+ax_f.axvline(f_uldm, ls='--', color='seagreen', lw=1.2, label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_f.set_title('Before pipeline: Lomb-Scargle (lift-contaminated)', fontsize=12)
+ax_f.legend(fontsize=10)
+ax_f.tick_params(labelsize=10)
+fig1.tight_layout()
+
+# ── Figure 2: Stage 1 — lift excision + LS ────────────────────────────────────
+fig2, (ax_t2, ax_f2) = plt.subplots(2, 1, figsize=(15, 8))
+
+t_plot = t_days_active.copy()
+y_plot = phases.copy()
+t_plot[lift_mask] = np.nan
+y_plot[lift_mask] = np.nan
+
+add_gap_shading(ax_t2)
+ax_t2.plot(t_days_active, phases * 1e6,
+           color='lightgrey', lw=0.4, zorder=1, label='Excised')
+ax_t2.plot(t_plot, y_plot * 1e6,
+           color='steelblue', lw=0.4, zorder=2, label='Retained')
+for t_lift in lift_starts:
+    ax_t2.axvspan((t_lift - lift_pad) / 86400,
+                  (t_lift + lift_duration + lift_pad) / 86400,
+                  alpha=0.12, color='firebrick')
+ax_t2.set_xlabel('Time [days from Monday 00:00]', fontsize=12)
+ax_t2.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax_t2.set_title('Stage 1: lift excision — phase time series', fontsize=12)
+ax_t2.set_xlim(0, n_days)
+ax_t2.legend(fontsize=10)
+ax_t2.tick_params(labelsize=10)
+
+ax_f2.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=1.2)
+ax_f2.axvline(f_sig,      ls='--', color='k',         lw=1.2, label=rf'$f_{{\rm sig}} = {f_sig}$ Hz')
+ax_f2.axvline(2 * f_sig, ls='--', color='slategrey', lw=1.2, label=rf'$2f_{{\rm sig}} = {2*f_sig}$ Hz')
+ax_f2.axvline(f_uldm,    ls='--', color='seagreen',  lw=1.2, label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_f2.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_f2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_f2.set_title('Stage 1: lift excision — Lomb-Scargle', fontsize=12)
+ax_f2.legend(fontsize=10)
+ax_f2.tick_params(labelsize=10)
+fig2.tight_layout()
+
+# ── Figure 3: Stages 2–3 — notch residuals + ULDM recovery ───────────────────
+fig3, (ax_r1, ax_r2) = plt.subplots(2, 1, figsize=(15, 8))
+
+add_gap_shading(ax_r1)
+ax_r1.plot(t_clean / 86400, y_notched * 1e6,
+           color='seagreen', lw=0.4, zorder=2, label='Notched residuals')
+ax_r1.plot(t_fine  / 86400, y_true    * 1e6,
+           color='firebrick', lw=1.5, ls='--', label='True ULDM signal')
+ax_r1.set_xlabel('Time [days from Monday 00:00]', fontsize=12)
+ax_r1.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax_r1.set_title('Stages 2–3: least-squares notch residuals vs true ULDM signal', fontsize=12)
+ax_r1.set_xlim(0, n_days)
+ax_r1.legend(fontsize=10)
+ax_r1.tick_params(labelsize=10)
+
+ax_r2.plot(f_grid, np.sqrt(S_ls_notched), color='seagreen', lw=1.2)
+ax_r2.axvline(f_uldm, ls='--', color='firebrick', lw=1.5,
+              label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+ax_r2.axvline(f_sig,      ls=':',  color='grey',      lw=1.2,
+              label=rf'$f_{{\rm sig}} = {f_sig}$ Hz (notched)')
+ax_r2.axvline(2 * f_sig, ls=':',  color='slategrey', lw=1.2,
+              label=rf'$2f_{{\rm sig}} = {2*f_sig}$ Hz (notched)')
+ax_r2.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_r2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_r2.set_title('Stage 3: Lomb-Scargle of notched residuals — ULDM recovery', fontsize=12)
+ax_r2.legend(fontsize=10)
+ax_r2.tick_params(labelsize=10)
+fig3.tight_layout()
+
+print(f"\n  GGN peak  (post-excision LS): "
+      f"{np.sqrt(S_ls[(f_grid>=f_sig-0.02)&(f_grid<=f_sig+0.02)].max()):.4e}")
+print(f"  ULDM peak (post-notch LS):    "
+      f"{np.sqrt(ls_psd(t_clean, y_notched, np.array([f_uldm]))[0]):.4e}")
+
+plt.show()
