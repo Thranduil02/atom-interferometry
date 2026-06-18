@@ -4,10 +4,12 @@ Lift excision and Lomb-Scargle recovery with nighttime-only operation.
 A 7-day run with the interferometer active only during nighttime (18:00–08:00),
 with ±30 min jitter on the switch-on and switch-off times each night.
 
-GGN source: point-mass oscillator at f_sig = 0.12 Hz.
-Lift-mass transients are excised with padding; the remainder is analysed with
-Lomb-Scargle, then a least-squares notch at f_sig removes the GGN signal to
-recover the ULDM peak at 0.1 Hz.
+GGN source: up to three independent point-mass oscillators (A, B, C), each
+with its own on/off toggle, frequency, mass, amplitude, distance and mean
+height. Lift-mass transients are excised with padding; the remainder is
+analysed with Lomb-Scargle, then a least-squares notch at each active
+oscillator's frequency (and 2nd harmonic) removes the GGN signal to recover
+the ULDM peak at 0.1 Hz.
 """
 
 import numpy as np
@@ -36,8 +38,36 @@ m_atom = 1.46e-25;  hbar = 1.055e-34
 v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
 G = 6.67e-11;  g = 9.81
 
-# oscillator GGN source
-M_osc = 1;  h_0 = 1;  D_0 = 5;  A = 1;  f_sig = 0.12
+# ── GGN oscillator A ───────────────────────────────────────────────────────────
+oscA_enable = True
+oscA_f      = 0.14    # Hz
+oscA_M      = 1       # kg
+oscA_amp    = 1       # m, oscillation amplitude
+oscA_D      = 5       # m, horizontal distance from atom axis
+oscA_h0     = 1       # m, mean height
+
+# ── GGN oscillator B ───────────────────────────────────────────────────────────
+oscB_enable = True
+oscB_f      = 0.20
+oscB_M      = 1
+oscB_amp    = 1
+oscB_D      = 8
+oscB_h0     = 3
+
+# ── GGN oscillator C ───────────────────────────────────────────────────────────
+oscC_enable = True
+oscC_f      = 0.08
+oscC_M      = 1
+oscC_amp    = 1
+oscC_D      = 5
+oscC_h0     = -6
+
+oscillators = [
+    dict(name='A', enable=oscA_enable, f=oscA_f, M=oscA_M, amp=oscA_amp, D=oscA_D, h0=oscA_h0),
+    dict(name='B', enable=oscB_enable, f=oscB_f, M=oscB_M, amp=oscB_amp, D=oscB_D, h0=oscB_h0),
+    dict(name='C', enable=oscC_enable, f=oscC_f, M=oscC_M, amp=oscC_amp, D=oscC_D, h0=oscC_h0),
+]
+active_oscillators = [o for o in oscillators if o['enable']]
 
 # lift parameters
 M_lift = 1000;  D_lift = 10
@@ -93,8 +123,8 @@ def arm_positions(z0, floor, upper=False):
         path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
     return path[:N_fly]
 
-def V_osc(z, h):
-    return -G * M_osc  / np.sqrt(D_0**2    + (z - h)**2)
+def V_osc(z, h, M, D):
+    return -G * M / np.sqrt(D**2 + (z - h)**2)
 
 def V_lift(z, h):
     return -G * M_lift / np.sqrt(D_lift**2 + (z - h)**2)
@@ -140,6 +170,9 @@ _n_night = sum(((t_meas_all >= on_times[d]) & (t_meas_all < off_times[d])).sum()
                for d in range(n_days))
 print(f"Schedule: ON ~{hour_evening:02d}:00 – {hour_morning:02d}:00  "
       f"(~{active_hrs}h/night, ±{jitter_min} min jitter)")
+for osc in active_oscillators:
+    print(f"GGN oscillator {osc['name']}: f={osc['f']} Hz, M={osc['M']} kg, "
+          f"A={osc['amp']} m, D={osc['D']} m, h0={osc['h0']} m")
 if enable_jitter:
     print(f"Cycle jitter     : ±{cycle_jitter} s (uniform)")
 print(f"Total grid shots : {N_grid:,}")
@@ -174,10 +207,12 @@ for i in range(N_active):
     t_start = t_starts_active[i]
     t_abs   = t_start + t_local
 
-    # oscillator GGN
-    h_osc = h_0 + A * np.cos(2 * np.pi * f_sig * t_abs)
-    dphi  = (V_osc(upper1, h_osc) - V_osc(lower1, h_osc)) \
-          - (V_osc(upper2, h_osc) - V_osc(lower2, h_osc))
+    # oscillator GGN — sum over all active oscillators
+    dphi = np.zeros(N_fly)
+    for osc in active_oscillators:
+        h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
+        dphi += (V_osc(upper1, h_osc, osc['M'], osc['D']) - V_osc(lower1, h_osc, osc['M'], osc['D'])) \
+              - (V_osc(upper2, h_osc, osc['M'], osc['D']) - V_osc(lower2, h_osc, osc['M'], osc['D']))
 
     # lift contribution — pre-filter to overlapping events only
     nearby = lift_starts[(lift_starts < t_start + T_fly) &
@@ -213,8 +248,8 @@ print(f"Contaminated:       {lift_mask.sum():,}")
 print(f"Retained:           {N_clean:,}")
 
 # ── frequency grid ─────────────────────────────────────────────────────────────
-f_nyq  = 0.5 / T_cyc
-f_grid = np.linspace(1 / T_span_total, f_nyq, 6000)
+f_max  = 0.3
+f_grid = np.linspace(1 / T_span_total, f_max, 7200)
 
 # ── Lomb-Scargle PSD (chunked for memory efficiency) ──────────────────────────
 def ls_psd(t, y, freqs, chunk=64):
@@ -239,17 +274,21 @@ S_ls_full = ls_psd(t_meas_active, phases, f_grid)
 print("Computing LS (post-excision)...")
 S_ls = ls_psd(t_clean, y_clean, f_grid)
 
-# ── Stage 2: least-squares notch at f_sig and 2*f_sig ────────────────────────
+# ── Stage 2: least-squares notch at each active oscillator's f and 2f ────────
 # Basis vectors use shot start times (t_starts_clean) not measurement times:
 # GGN phase is accumulated from t_start, so signal phase is 2π f t_start.
-omega_sig  = 2 * np.pi * f_sig
-omega_sig2 = 2 * np.pi * 2 * f_sig
-A_notch    = np.column_stack([np.cos(omega_sig  * t_starts_clean),
-                               np.sin(omega_sig  * t_starts_clean),
-                               np.cos(omega_sig2 * t_starts_clean),
-                               np.sin(omega_sig2 * t_starts_clean)])
-coeffs, _, _, _ = np.linalg.lstsq(A_notch, y_clean, rcond=None)
-y_notched = y_clean - A_notch @ coeffs
+notch_freqs = [f for osc in active_oscillators for f in (osc['f'], 2 * osc['f'])]
+if notch_freqs:
+    basis_cols = []
+    for f in notch_freqs:
+        omega = 2 * np.pi * f
+        basis_cols.append(np.cos(omega * t_starts_clean))
+        basis_cols.append(np.sin(omega * t_starts_clean))
+    A_notch         = np.column_stack(basis_cols)
+    coeffs, _, _, _ = np.linalg.lstsq(A_notch, y_clean, rcond=None)
+    y_notched       = y_clean - A_notch @ coeffs
+else:
+    y_notched = y_clean.copy()
 
 # ── Stage 3: LS on notched residuals ─────────────────────────────────────────
 print("Computing LS (post-notch)...")
@@ -292,12 +331,9 @@ ax_t.legend(fontsize=10)
 ax_t.tick_params(labelsize=10)
 
 ax_f.plot(f_grid, np.sqrt(S_ls_full), color='steelblue', lw=1.2)
-ax_f.axvline(f_sig,  ls='--', color='k',       lw=1.2, label=rf'$f_{{\rm sig}} = {f_sig}$ Hz')
-ax_f.axvline(f_uldm, ls='--', color='seagreen', lw=1.2, label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
 ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
 ax_f.set_title('Before pipeline: Lomb-Scargle (lift-contaminated)', fontsize=12)
-ax_f.legend(fontsize=10)
 ax_f.tick_params(labelsize=10)
 fig1.tight_layout()
 
@@ -326,13 +362,9 @@ ax_t2.legend(fontsize=10)
 ax_t2.tick_params(labelsize=10)
 
 ax_f2.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=1.2)
-ax_f2.axvline(f_sig,      ls='--', color='k',         lw=1.2, label=rf'$f_{{\rm sig}} = {f_sig}$ Hz')
-ax_f2.axvline(2 * f_sig, ls='--', color='slategrey', lw=1.2, label=rf'$2f_{{\rm sig}} = {2*f_sig}$ Hz')
-ax_f2.axvline(f_uldm,    ls='--', color='seagreen',  lw=1.2, label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
 ax_f2.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_f2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
 ax_f2.set_title('Stage 1: lift excision — Lomb-Scargle', fontsize=12)
-ax_f2.legend(fontsize=10)
 ax_f2.tick_params(labelsize=10)
 fig2.tight_layout()
 
@@ -352,21 +384,16 @@ ax_r1.legend(fontsize=10)
 ax_r1.tick_params(labelsize=10)
 
 ax_r2.plot(f_grid, np.sqrt(S_ls_notched), color='seagreen', lw=1.2)
-ax_r2.axvline(f_uldm, ls='--', color='firebrick', lw=1.5,
-              label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
-ax_r2.axvline(f_sig,      ls=':',  color='grey',      lw=1.2,
-              label=rf'$f_{{\rm sig}} = {f_sig}$ Hz (notched)')
-ax_r2.axvline(2 * f_sig, ls=':',  color='slategrey', lw=1.2,
-              label=rf'$2f_{{\rm sig}} = {2*f_sig}$ Hz (notched)')
 ax_r2.set_xlabel('$f$ [Hz]', fontsize=12)
 ax_r2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
 ax_r2.set_title('Stage 3: Lomb-Scargle of notched residuals — ULDM recovery', fontsize=12)
-ax_r2.legend(fontsize=10)
 ax_r2.tick_params(labelsize=10)
 fig3.tight_layout()
 
-print(f"\n  GGN peak  (post-excision LS): "
-      f"{np.sqrt(S_ls[(f_grid>=f_sig-0.02)&(f_grid<=f_sig+0.02)].max()):.4e}")
+for osc in active_oscillators:
+    f = osc['f']
+    print(f"  GGN peak  osc {osc['name']} ({f} Hz, post-excision LS): "
+          f"{np.sqrt(S_ls[(f_grid>=f-0.02)&(f_grid<=f+0.02)].max()):.4e}")
 print(f"  ULDM peak (post-notch LS):    "
       f"{np.sqrt(ls_psd(t_clean, y_notched, np.array([f_uldm]))[0]):.4e}")
 
