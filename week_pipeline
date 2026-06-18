@@ -26,6 +26,7 @@ rng_seed         = 42
 enable_failures = True    # set False to disable shot failures entirely
 p_fail          = 0.01    # probability that any given shot fails
 
+
 # ── cycle timing jitter ────────────────────────────────────────────────────────
 enable_jitter   = True    # set False for perfectly uniform cycle grid
 cycle_jitter    = 0.1     # ± s — uniform random offset applied to each shot start
@@ -255,7 +256,8 @@ print("Computing LS (post-notch)...")
 S_ls_notched = ls_psd(t_clean, y_notched, f_grid)
 
 # ── true ULDM signal on a fine time grid ──────────────────────────────────────
-t_fine = np.linspace(t_clean[0], t_clean[-1], 5000)
+# dt must stay well below the ULDM Nyquist limit (1/(2*f_uldm) = 5 s) to avoid aliasing
+t_fine = np.arange(t_clean[0], t_clean[-1], 1.0)
 y_true = uldm_phase_vec(t_fine)
 
 # ── daytime gap bands for plots ────────────────────────────────────────────────
