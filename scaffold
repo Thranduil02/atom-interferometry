@@ -206,10 +206,12 @@ dp2 = np.empty(len(subsample_times))
 for k, t_c in enumerate(subsample_times):
     def ig1(t):
         a = alpha_func(t)
-        return float(V_interp(a, float(interp_u1(t))) - V_interp(a, float(interp_l1(t))))
+        return float(V_interp(a, float(interp_u1(t)), grid=False)
+                    - V_interp(a, float(interp_l1(t)), grid=False))
     def ig2(t):
         a = alpha_func(t)
-        return float(V_interp(a, float(interp_u2(t))) - V_interp(a, float(interp_l2(t))))
+        return float(V_interp(a, float(interp_u2(t)), grid=False)
+                    - V_interp(a, float(interp_l2(t)), grid=False))
     p1, _ = quad(ig1, t_c - 2*T, t_c, limit=100)
     p2, _ = quad(ig2, t_c - 2*T, t_c, limit=100)
     dp1[k] = (m_atom / hbar) * p1
