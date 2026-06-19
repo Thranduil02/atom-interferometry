@@ -180,7 +180,7 @@ def ls_psd(t, y, freqs, return_coeffs=False):
         return psd, C / CC, S / SS
     return psd
 
-f_grid = np.linspace(1/T_total, 0.49/T_cyc, 6000)
+f_grid = np.linspace(1/T_total, 0.4, 9800)
 S_ls   = ls_psd(t_clean, y_clean, f_grid)
 
 # ── Stage 2: least-squares notch at f_sig ─────────────────────────────────────

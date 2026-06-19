@@ -1,0 +1,167 @@
+# -*- coding: utf-8 -*-
+"""
+ULDM signal plus up to three independent GGN oscillators — continuous run.
+
+No day/night scheduling, no cycle jitter, no lift transients: just a short
+continuous run for quickly exploring how multiple oscillators interact with
+the ULDM signal in the periodogram.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── run parameters ─────────────────────────────────────────────────────────────
+T_total = 4000    # s
+T_cyc   = 2.0     # s
+
+# ── GGN oscillator A ───────────────────────────────────────────────────────────
+oscA_enable = True
+oscA_f      = 0.13    # Hz
+oscA_M      = 1       # kg
+oscA_amp    = 1       # m, oscillation amplitude
+oscA_D      = 5       # m, horizontal distance from atom axis
+oscA_h0     = 1       # m, mean height
+
+# ── GGN oscillator B ───────────────────────────────────────────────────────────
+oscB_enable = True
+oscB_f      = 0.20
+oscB_M      = 1
+oscB_amp    = 1
+oscB_D      = 8
+oscB_h0     = 3
+
+# ── GGN oscillator C ───────────────────────────────────────────────────────────
+oscC_enable = True
+oscC_f      = 0.08
+oscC_M      = 1
+oscC_amp    = 1
+oscC_D      = 3
+oscC_h0     = -3
+
+oscillators = [
+    dict(name='A', enable=oscA_enable, f=oscA_f, M=oscA_M, amp=oscA_amp, D=oscA_D, h0=oscA_h0),
+    dict(name='B', enable=oscB_enable, f=oscB_f, M=oscB_M, amp=oscB_amp, D=oscB_D, h0=oscB_h0),
+    dict(name='C', enable=oscC_enable, f=oscC_f, M=oscC_M, amp=oscC_amp, D=oscC_D, h0=oscC_h0),
+]
+active_oscillators = [o for o in oscillators if o['enable']]
+
+# ── physical constants ─────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11;  g = 9.81
+
+u0 = 3.86;  dt = 0.01;  T = 0.73
+T_fly = 2 * T;  N_fly = int(round(T_fly / dt));  t_local = np.arange(N_fly) * dt
+
+# ── ULDM parameters ────────────────────────────────────────────────────────────
+G_nat       = 6.708e-39
+d_e         = 1
+d_m_e       = 1
+m_phi       = 4e-16
+rho_phi     = 0.3
+f_uldm      = 0.1
+theta       = np.pi / 2
+xi          = 0.06
+omega_A     = 2.67e15
+L_base      = 10
+delta_r     = 5
+n_lmt       = 1000
+conv_factor = 2.77e-12
+
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * 3e8))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / 3e8) / 2)
+            * np.sin(omega_phi * T / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / 3e8) / 2 + t) + theta))
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _ = atom_path(p1[-1] if len(p1) else float(floor), v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V_osc(z, h, M, D):
+    return -G * M / np.sqrt(D**2 + (z - h)**2)
+
+lower1 = arm_positions(0, 0, upper=False);  upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=True)
+
+# ── time grid ──────────────────────────────────────────────────────────────────
+N_cyc    = int(T_total / T_cyc)
+t_starts = np.arange(N_cyc) * T_cyc
+t_meas   = t_starts + T_fly
+
+print(f"Total cycles: {N_cyc:,}  ({T_total} s)")
+for osc in active_oscillators:
+    print(f"GGN oscillator {osc['name']}: f={osc['f']} Hz, M={osc['M']} kg, "
+          f"A={osc['amp']} m, D={osc['D']} m, h0={osc['h0']} m")
+
+# ── compute phases ─────────────────────────────────────────────────────────────
+phases = uldm_phase_vec(t_meas)
+
+print("Computing phases...")
+for i in range(N_cyc):
+    t_abs = t_starts[i] + t_local
+    dphi  = np.zeros(N_fly)
+    for osc in active_oscillators:
+        h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
+        dphi += (V_osc(upper1, h_osc, osc['M'], osc['D']) - V_osc(lower1, h_osc, osc['M'], osc['D'])) \
+              - (V_osc(upper2, h_osc, osc['M'], osc['D']) - V_osc(lower2, h_osc, osc['M'], osc['D']))
+    phases[i] += (m_atom / hbar) * np.trapezoid(dphi, t_local)
+
+# ── Lomb-Scargle ───────────────────────────────────────────────────────────────
+def ls_psd(t, y, freqs, chunk=128):
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w   = 2 * np.pi * freqs[i:i+chunk]
+        wt  = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
+        sh  = wt - (w * tau)[:, None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct @ y;  S  = st @ y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff * 0.5 * (C**2 / CC + S**2 / SS)
+    return out
+
+f_max  = 0.4
+f_grid = np.linspace(1 / T_total, f_max, 9600)
+
+print("Computing LS...")
+S_ls = ls_psd(t_meas, phases, f_grid)
+
+# ── plots ──────────────────────────────────────────────────────────────────────
+fig, (ax_t, ax_f) = plt.subplots(2, 1, figsize=(14, 8))
+
+ax_t.plot(t_meas, phases * 1e6, color='steelblue', lw=0.6)
+ax_t.set_xlabel('$t$ [s]', fontsize=12)
+ax_t.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=12)
+ax_t.set_title('Phase time series — ULDM + active GGN oscillators', fontsize=12)
+
+ax_f.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=1.0)
+ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
+ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
+ax_f.set_title('Lomb-Scargle periodogram', fontsize=12)
+
+fig.tight_layout()
+plt.show()
