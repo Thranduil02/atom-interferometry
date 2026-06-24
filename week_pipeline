@@ -25,13 +25,13 @@ lift_pad         = 10.0   # s – padding either side of each lift window
 rng_seed         = 42
 
 # ── MOT failures ──────────────────────────────────────────────────────────────
-enable_failures = False    # set False to disable shot failures entirely
+enable_failures = True    # set False to disable shot failures entirely
 p_fail          = 0.01    # probability that any given shot fails
 
 
 # ── cycle timing jitter ────────────────────────────────────────────────────────
 enable_jitter   = True    # set False for perfectly uniform cycle grid
-cycle_jitter    = 0.5     # ± s — uniform random offset applied to each shot start
+cycle_jitter    = 0.1     # ± s — uniform random offset applied to each shot start
 
 # ── physical constants ─────────────────────────────────────────────────────────
 m_atom = 1.46e-25;  hbar = 1.055e-34
@@ -47,7 +47,7 @@ oscA_D      = 5       # m, horizontal distance from atom axis
 oscA_h0     = 1       # m, mean height
 
 # ── GGN oscillator B ───────────────────────────────────────────────────────────
-oscB_enable = False
+oscB_enable = True
 oscB_f      = 0.20
 oscB_M      = 1
 oscB_amp    = 1
@@ -55,7 +55,7 @@ oscB_D      = 8
 oscB_h0     = 3
 
 # ── GGN oscillator C ───────────────────────────────────────────────────────────
-oscC_enable = False
+oscC_enable = True
 oscC_f      = 0.08
 oscC_M      = 1
 oscC_amp    = 1
