@@ -1,0 +1,215 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import integrate
+from scipy.integrate import quad
+from scipy.interpolate import RectBivariateSpline, interp1d
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+G          = 6.67430e-11
+u_initial  = 3.86          # initial vertical velocity [m/s]
+m_atom     = 1.46e-25      # Sr-88 mass [kg]
+hbar       = 1.055e-34
+wavelength = 698e-9
+wavenumber = 2 * np.pi / wavelength
+T          = 0.73          # half-period [s]
+n          = 1000          # photon recoil number
+velocity_boost = n * hbar * wavenumber / m_atom
+g          = 9.81
+
+# ── Gravitational potential of a solid cuboid ─────────────────────────────────
+def gravitational_potential(x, y, z, x_0, y_0, z_0, M_cub, a_cub, b_cub, c_cub):
+    """
+    Potential at (x,y,z) due to a solid cuboid of mass M_cub [kg],
+    side lengths a_cub (x), b_cub (y), c_cub (z) [m], centred on (x_0,y_0,z_0).
+    Integrates in Cartesian coords over the cuboid volume.
+    """
+    rho_vol = M_cub / (a_cub * b_cub * c_cub)
+
+    def integrand(zp, yp, xp):
+        dx = x - (x_0 + xp)
+        dy = y - (y_0 + yp)
+        dz = z - (z_0 + zp)
+        r  = np.sqrt(dx**2 + dy**2 + dz**2)
+        return -G * rho_vol / r if r > 0 else 0.0
+
+    result, _ = integrate.nquad(
+        integrand,
+        [[-c_cub / 2, c_cub / 2],   # zp (innermost)
+         [-b_cub / 2, b_cub / 2],   # yp
+         [-a_cub / 2, a_cub / 2]],  # xp (outermost)
+        opts={'limit': 50}
+    )
+    return result
+
+# ── Atom trajectory ───────────────────────────────────────────────────────────
+def atom_path(z_0, u, t_start, t_end, delta_t, acc, floor):
+    timesteps = np.arange(t_start, t_end, delta_t)
+    z, v = z_0, u
+    z_positions = []
+    for _ in timesteps:
+        z += v * delta_t + 0.5 * acc * delta_t**2
+        v += acc * delta_t
+        if z <= floor and v < 0:
+            z = floor
+            v = 0.0
+            break
+        z_positions.append(z)
+    return timesteps[:len(z_positions)], np.array(z_positions), v
+
+
+def lower_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
+    seg1 = atom_path(z_0, u,                             t_start, t_end,   delta_t, acc, floor)
+    seg2 = atom_path(seg1[1][-1], seg1[2] + velocity_boost, t_end, 2*t_end, delta_t, acc, floor)
+    path = np.concatenate([seg1[1], seg2[1]])
+    t    = np.concatenate([seg1[0], seg2[0]])
+    if t[-1] < total_time:
+        t_rem = np.arange(t[-1] + delta_t, total_time, delta_t)
+        path  = np.concatenate([path, np.full_like(t_rem, floor)])
+        t     = np.concatenate([t, t_rem])
+    return t, path
+
+
+def upper_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
+    seg1 = atom_path(z_0, u + velocity_boost,            t_start, t_end,   delta_t, acc, floor)
+    seg2 = atom_path(seg1[1][-1], seg1[2] - velocity_boost, t_end, 2*t_end, delta_t, acc, floor)
+    path = np.concatenate([seg1[1], seg2[1]])
+    t    = np.concatenate([seg1[0], seg2[0]])
+    if t[-1] < total_time:
+        t_rem = np.arange(t[-1] + delta_t, total_time, delta_t)
+        path  = np.concatenate([path, np.full_like(t_rem, floor)])
+        t     = np.concatenate([t, t_rem])
+    return t, path
+
+# ── Build multi-cycle trajectories ───────────────────────────────────────────
+N        = 100
+dt       = 0.01
+timestep = np.arange(0, N * 2, dt)
+
+lower1 = np.concatenate([lower_arm(0, u_initial, 0, T, dt, -g, 0)[1] for _ in range(N)])
+lower2 = np.concatenate([lower_arm(5, u_initial, 0, T, dt, -g, 5)[1] for _ in range(N)])
+upper1 = np.concatenate([upper_arm(0, u_initial, 0, T, dt, -g, 0)[1] for _ in range(N)])
+upper2 = np.concatenate([upper_arm(5, u_initial, 0, T, dt, -g, 5)[1] for _ in range(N)])
+
+# ── Atom positions ────────────────────────────────────────────────────────────
+x, y = 0.0, 0.0
+
+# ── Cuboid parameters ─────────────────────────────────────────────────────────
+M_cub = 38880   # mass [kg]
+a_cub = 0.225    # side length along x [m]
+b_cub = 6      # side length along y [m]
+c_cub = 12    # side length along z [m]
+
+y_0 = 0.0        # y position of cuboid centre [m]
+z_0 = 6       # z position of cuboid centre [m]
+
+# ── Oscillation parameters ────────────────────────────────────────────────────
+x_0_centre = 5  # mean x position of cuboid [m]
+x_0_amp    = 1e-6   # oscillation amplitude [m]
+f_osc      = 0.1    # oscillation frequency [Hz]
+
+x_0_arr = x_0_centre + x_0_amp * np.cos(2 * np.pi * f_osc * timestep)
+
+# ── Precompute potential on a 2-D grid (x_0, z_atom) ─────────────────────────
+z_min_phys = 0.0
+z_max_phys = max(upper1.max(), upper2.max()) + 0.5
+x0_lo = x_0_centre - x_0_amp - 0.05
+x0_hi = x_0_centre + x_0_amp + 0.05
+
+#increase these for better accuracy
+n_zgrid  = 50
+n_x0grid = 50
+z_grid   = np.linspace(z_min_phys, z_max_phys, n_zgrid)
+x0_grid  = np.linspace(x0_lo, x0_hi, n_x0grid)
+
+print("Precomputing potential grid ...")
+V_grid = np.zeros((n_x0grid, n_zgrid))
+for i, xi in enumerate(x0_grid):
+    for j, zj in enumerate(z_grid):
+        V_grid[i, j] = gravitational_potential(x, y, zj, xi, y_0, z_0, M_cub, a_cub, b_cub, c_cub)
+    print(f"  x0 row {i+1}/{n_x0grid} done")
+
+V_interp = RectBivariateSpline(x0_grid, z_grid, V_grid)
+
+# ── Trajectory interpolators ──────────────────────────────────────────────────
+t_full    = timestep[:len(lower1)]
+interp_l1 = interp1d(t_full, lower1, bounds_error=False, fill_value=(lower1[0], lower1[-1]))
+interp_u1 = interp1d(t_full, upper1, bounds_error=False, fill_value=(upper1[0], upper1[-1]))
+interp_l2 = interp1d(t_full, lower2, bounds_error=False, fill_value=(lower2[0], lower2[-1]))
+interp_u2 = interp1d(t_full, upper2, bounds_error=False, fill_value=(upper2[0], upper2[-1]))
+
+def x0_func(t):
+    return x_0_centre + x_0_amp * np.cos(2 * np.pi * f_osc * t)
+
+# ── Phase shift per cycle ─────────────────────────────────────────────────────
+subsample_times = np.arange(1, timestep.max(), 2)
+delta_phi_1     = np.empty(len(subsample_times))
+delta_phi_2     = np.empty(len(subsample_times))
+
+print("Computing phase shifts ...")
+for k, t_c in enumerate(subsample_times):
+    t_start = t_c - 1.0
+
+    def integrand_1(t):
+        x0 = x0_func(t)
+        return float(V_interp(x0, float(interp_u1(t)), grid=False)
+                    - V_interp(x0, float(interp_l1(t)), grid=False))
+
+    def integrand_2(t):
+        x0 = x0_func(t)
+        return float(V_interp(x0, float(interp_u2(t)), grid=False)
+                    - V_interp(x0, float(interp_l2(t)), grid=False))
+
+    phase1, _ = quad(integrand_1, t_start, t_start + 2*T, limit=100)
+    phase2, _ = quad(integrand_2, t_start, t_start + 2*T, limit=100)
+
+    delta_phi_1[k] = (m_atom / hbar) * phase1
+    delta_phi_2[k] = (m_atom / hbar) * phase2
+
+    if k % 10 == 0:
+        print(f"  cycle {k+1}/{len(subsample_times)}")
+
+phase_difference = delta_phi_1 - delta_phi_2
+
+# ── Periodogram via FFT ───────────────────────────────────────────────────────
+t_cycle     = 2.0
+N_k         = len(subsample_times)
+fft_vals    = np.fft.rfft(phase_difference)
+f_k         = np.fft.rfftfreq(N_k, d=t_cycle)
+S_phasediff = (t_cycle / N_k) * np.abs(fft_vals)**2
+
+print("Done.")
+
+# ── Plots ─────────────────────────────────────────────────────────────────────
+bg = '#fdfcf3'
+
+fig, ax = plt.subplots(3, 1, figsize=(10, 12), tight_layout=True)
+fig.patch.set_facecolor(bg)
+for a in ax:
+    a.set_facecolor(bg)
+
+ax[0].plot(subsample_times, phase_difference, 'o-', color='firebrick')
+ax[0].set_xlabel('$t$ [s]', fontsize=16)
+ax[0].set_ylabel(r'$\Delta\phi$ [rad]', fontsize=16)
+
+
+ax[1].plot(timestep, x_0_arr)
+ax[1].set_xlabel('$t$ [s]')
+ax[1].set_ylabel('$x_0$ [m]')
+ax[1].set_title('Cuboid position')
+
+ax[2].plot(f_k, np.sqrt(S_phasediff), 'b')
+ax[2].set_xlabel('$f$ [Hz]', fontsize=14)
+ax[2].set_ylabel(r'$\sqrt{\mathrm{PSD}}$ [rad / $\sqrt{\mathrm{Hz}}$]', fontsize=14)
+ax[2].set_title('Phase noise spectrum')
+
+bg = '#fdfcf3'
+
+fig, ax = plt.subplots()
+fig.patch.set_facecolor(bg)
+ax.set_facecolor(bg)
+ax.plot(subsample_times, phase_difference*1e6, color='firebrick')
+ax.set_xlabel('$t$ [s]', fontsize=16)
+ax.set_ylabel('$\Delta \Phi$ [$\mu$rad]', fontsize=16)
+plt.rcParams.update({'xtick.labelsize': 12, 'ytick.labelsize': 12})
+
+plt.show()
