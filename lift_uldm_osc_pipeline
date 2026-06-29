@@ -180,13 +180,15 @@ def ls_psd(t, y, freqs, return_coeffs=False):
         return psd, C / CC, S / SS
     return psd
 
-f_grid = np.linspace(1/T_total, 0.4, 9800)
+f_grid = np.linspace(1/T_total, 0.25, 9800)
 S_ls   = ls_psd(t_clean, y_clean, f_grid)
 
-# ── Stage 2: least-squares notch at f_sig ─────────────────────────────────────
-omega_sig = 2 * np.pi * f_sig
-A_notch   = np.column_stack([np.cos(omega_sig * t_clean),
-                              np.sin(omega_sig * t_clean)])
+# ── Stage 2: least-squares notch at user-specified frequencies ────────────────
+notch_freqs = np.array([f_sig, 2 * f_sig])   # Hz – frequencies to remove
+omega_notch = 2 * np.pi * notch_freqs
+A_notch     = np.column_stack(
+    [trig(w * t_clean) for w in omega_notch for trig in (np.cos, np.sin)]
+)
 coeffs, _, _, _ = np.linalg.lstsq(A_notch, y_clean, rcond=None)
 y_notched = y_clean - A_notch @ coeffs
 
@@ -264,7 +266,9 @@ ax_r1.tick_params(labelsize=11)
 
 ax_r2.plot(f_grid, np.sqrt(S_ls_notched), color='seagreen', lw=1.2)
 ax_r2.axvline(f_uldm, ls='--', color='firebrick', lw=1.5, label=rf'$f_\mathrm{{ULDM}} = {f_uldm}$ Hz')
-ax_r2.axvline(f_sig,  ls=':',  color='grey',      lw=1.2, label=rf'$f_\mathrm{{GGN}} = {f_sig}$ Hz (notched)')
+for i, f_n in enumerate(notch_freqs):
+    ax_r2.axvline(f_n, ls=':', color='grey', lw=1.2,
+                  label='Notched' if i == 0 else '')
 ax_r2.set_xlabel('$f$ [Hz]', fontsize=14)
 ax_r2.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=14)
 ax_r2.set_title('Stage 3: Lomb–Scargle of notched residuals — ULDM recovery', fontsize=14)
