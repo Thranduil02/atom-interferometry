@@ -25,12 +25,12 @@ lift_pad         = 10.0   # s – padding either side of each lift window
 rng_seed         = 42
 
 # ── MOT failures ──────────────────────────────────────────────────────────────
-enable_failures = False   # set False to disable shot failures entirely
+enable_failures = True   # set False to disable shot failures entirely
 p_fail          = 0.01    # probability that any given shot fails
 
 
 # ── cycle timing jitter ────────────────────────────────────────────────────────
-enable_jitter   = False    # set False for perfectly uniform cycle grid
+enable_jitter   = True    # set False for perfectly uniform cycle grid
 cycle_jitter    = 0.1     # ± s — uniform random offset applied to each shot start
 
 # ── physical constants ─────────────────────────────────────────────────────────
@@ -277,7 +277,8 @@ S_ls = ls_psd(t_clean, y_clean, f_grid)
 # ── Stage 2: least-squares notch at each active oscillator's f and 2f ────────
 # Basis vectors use shot start times (t_starts_clean) not measurement times:
 # GGN phase is accumulated from t_start, so signal phase is 2π f t_start.
-notch_freqs = [f for osc in active_oscillators for f in (osc['f'], 2 * osc['f'])]
+extra_notch_freqs = []   # Hz – add any additional frequencies to notch here
+notch_freqs = [f for osc in active_oscillators for f in (osc['f'], 2 * osc['f'])] + list(extra_notch_freqs)
 if notch_freqs:
     basis_cols = []
     for f in notch_freqs:
@@ -311,6 +312,12 @@ def add_gap_shading(ax):
     for i, (g0, g1) in enumerate(gap_bands):
         ax.axvspan(g0, g1, color='lightgrey', alpha=0.6, zorder=0,
                    label='Daytime (off)' if i == 0 else '')
+
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
 # ── Figure 1: all active data — time series + LS (lift contamination visible) ─
 fig1, (ax_t, ax_f) = plt.subplots(2, 1, figsize=(15, 8))

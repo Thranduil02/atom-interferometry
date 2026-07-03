@@ -121,6 +121,12 @@ mask_nu   = (f_fft_nu > 0) & (f_fft_nu <= f_max)
 f_fft_nu  = f_fft_nu[mask_nu]
 S_fft_nu  = S_fft_nu[mask_nu]
 
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = True   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
 # ── diagnostic figure (3 panels: histogram, spacings, phase) ──────────────────
 fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 

@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 N_total  = 2000       # total shots attempted
 T_cyc    = 2.0        # uniform cycle time [s]
 p_fail   = 0.01      # probability of a shot failing
-N_real   = 50         # realisations averaged per p value in fig 5
+N_real   = 20         # realisations averaged per p value in fig 5
 rng_seed = 42
 d_e = 1;  d_m_e = 1
 
@@ -122,6 +122,12 @@ f_grid = np.linspace(0.5/(N_survived*T_cyc), f_max, 8000)
 
 print("Computing LS...")
 S_ls = ls_psd(t_good, phases_good, f_grid)
+
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = True   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
 # ── figure ─────────────────────────────────────────────────────────────────────
 fig, (ax_f, ax_l) = plt.subplots(1, 2, figsize=(14, 5))

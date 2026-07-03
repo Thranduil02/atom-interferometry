@@ -95,6 +95,12 @@ lower2 = arm_positions(5, 5, upper=False);  upper2 = arm_positions(5, 5, upper=T
 active_h = 24 - hour_on + hour_off   # e.g. 14 h
 off_h    = hour_on - hour_off        # e.g. 10 h
 
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = True   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
 # ── plot helper ────────────────────────────────────────────────────────────────
 def make_figure(suptitle, t_meas_active, phases, gap_bands, S_ls, ls_subtitle=''):
     """
