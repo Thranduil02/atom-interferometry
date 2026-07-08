@@ -1,0 +1,134 @@
+"""
+Multi-oscillator GGN + ULDM: classical periodogram.
+
+Three independently togglable GGN oscillators plus an ULDM signal at f_uldm Hz.
+Uniform cycle time T_cyc = 2.0 s.  Output: classical DFT periodogram.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom  = 1.46e-25;  hbar = 1.055e-34
+G       = 6.67e-11;  g    = 9.81
+v_kick  = 1000 * hbar * (2 * np.pi / 698e-9) / m_atom
+u0      = 3.86
+T       = 0.73        # half-interferometry time [s]
+T_fly   = 2 * T
+T_cyc   = 2.0         # cycle time [s]
+dt      = 0.01
+
+N_fly   = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+T_total  = 10000      # total simulation time [s]
+N_cycles = int(T_total / T_cyc)
+
+# ── GGN oscillators ────────────────────────────────────────────────────────────
+oscillators = [
+    dict(name='A', enable=True,  f=0.12, amp=1.0, M=1.0, D=5.0, h0= 1.0),
+    dict(name='B', enable=True,  f=0.20, amp=1.0, M=1.0, D=8.0, h0= 3.0),
+    dict(name='C', enable=False, f=0.08, amp=1.0, M=1.0, D=3.0, h0=-3.0),
+]
+active_oscillators = [o for o in oscillators if o['enable']]
+
+# ── ULDM parameters ────────────────────────────────────────────────────────────
+enable_uldm = True
+f_uldm      = 0.1
+G_nat       = 6.708e-39
+d_e         = 1;  d_m_e      = 1
+m_phi       = 4e-16;  rho_phi = 0.3
+theta       = np.pi / 2;  xi  = 0.06
+omega_A     = 2.67e15
+L_base      = 10;  delta_r    = 5
+n_lmt       = 1000;  conv_factor = 2.77e-12
+
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * 3e8))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / 3e8) / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / 3e8) / 2 + t) + theta))
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h, M, D):
+    return -G * M / np.sqrt(D**2 + (z - h)**2)
+
+# ── pre-compute arm positions (reused for every cycle) ─────────────────────────
+lower1 = arm_positions(0, 0, upper=False)
+upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False)
+upper2 = arm_positions(5, 5, upper=True)
+
+# ── compute phases ─────────────────────────────────────────────────────────────
+t_starts = np.arange(N_cycles) * T_cyc
+t_meas   = t_starts + T_fly
+
+phases = np.zeros(N_cycles)
+print(f"Computing {N_cycles:,} cycles...")
+for k in range(N_cycles):
+    t_abs = t_starts[k] + t_local
+    dphi  = np.zeros(N_fly)
+    for osc in active_oscillators:
+        h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
+        dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
+               - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
+    phases[k] = (m_atom / hbar) * np.trapezoid(dphi, t_local)
+
+if enable_uldm:
+    phases += uldm_phase_vec(t_meas)
+
+# ── classical periodogram (FFT) ────────────────────────────────────────────────
+f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
+S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(phases - phases.mean()))**2
+mask = f_k > 0
+f_plot, S_plot = f_k[mask], S_k[mask]
+
+# ── plot style ─────────────────────────────────────────────────────────────────
+warm_background = True
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
+# ── figure ─────────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(11, 5))
+
+ax.plot(f_plot, np.sqrt(S_plot), color='steelblue', lw=1.2)
+
+for osc in active_oscillators:
+    ax.axvline(osc['f'], ls=':', color='firebrick', lw=1.0, alpha=0.8,
+               label=f"osc {osc['name']} ({osc['f']} Hz)")
+if enable_uldm:
+    ax.axvline(f_uldm, ls='--', color='seagreen', lw=1.2,
+               label=f'ULDM ({f_uldm} Hz)')
+
+ax.set_xlabel('$f$ [Hz]', fontsize=15)
+ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
+ax.tick_params(labelsize=13)
+ax.legend(fontsize=11)
+
+fig.tight_layout()
+plt.show()
