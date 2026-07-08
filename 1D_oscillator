@@ -23,7 +23,7 @@ velocity_boost = n * hbar * wavenumber / m_atom
 G = 6.67e-11
 
 
-T_total = 300
+T_total = 10000
 timestep = np.arange(0, T_total, dt)
 
 h_0 = 1
@@ -188,57 +188,29 @@ mask = k / (N_k * delta_t) <= nyquist_freq
 f_k_filtered = k[mask] / (N_k * delta_t)
 S_phasediff_filtered = S_phasediff[mask]
 
-# =====================
-# Plotting
-# =====================
-fig, (ax_paths, ax_h, ax_phi) = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
-ax_paths.plot(timestep, lower1, lw=2, color='b')
-ax_paths.plot(timestep, lower2, lw=2, color='b')
-ax_paths.plot(timestep, upper1, lw=2, color='r')
-ax_paths.plot(timestep, upper2, lw=2, color='r')
+# ── Figure 1: phase difference vs time ────────────────────────────────────────
+fig1, ax_phi = plt.subplots(figsize=(12, 5))
 
-t_positions = [1.46 + 2*q for q in range(15)]
-labels = [rf'$\ell={i}$' for i in range(1, 16)]
-
-for t_pos in t_positions:
-    ax_paths.axvline(t_pos, color='k', linestyle=':', linewidth=1)
-    ax_h.axvline(t_pos, color='k', linestyle=':', linewidth=1)
-    ax_phi.axvline(t_pos, color='k', linestyle=':', linewidth=1)
-
-for t_pos, label in zip(t_positions, labels):
-    ax_paths.text(
-        t_pos, 1.03, label,
-        transform=ax_paths.get_xaxis_transform(),
-        ha='center', va='bottom', fontsize=12,
-        clip_on=False
-    )
-
-ax_paths.tick_params(labelbottom=False)
-ax_h.tick_params(labelbottom=False)
-
-ax_phi.set_xlabel(r'$t$ [s]', fontsize=16)
-ax_paths.set_ylabel('$z(t)$ [m]', fontsize=16)
-
-ax_h.plot(timestep, h_t, color='rebeccapurple', lw=3)
-ax_h.set_ylabel('$h(t)$ [m]', fontsize=16)
-
-ax_phi.plot(subsample_times, subsample_phase_diff * 10**6, 'o', color='firebrick', markersize=9)
+ax_phi.plot(subsample_times, subsample_phase_diff * 1e6, 'o', color='firebrick', markersize=6)
 ax_phi.set_xlabel('$t$ [s]', fontsize=16)
 ax_phi.set_ylabel(r'$\Delta\Phi$ [$\mu$rad]', fontsize=16)
+ax_phi.tick_params(labelsize=13)
 
-xmin, xmax = ax_paths.get_xlim()
-ax_h.set_xlim(xmin, xmax)
-ax_phi.set_xlim(xmin, xmax)
+fig1.tight_layout()
 
-for ax in (ax_paths, ax_h, ax_phi):
-    ax.tick_params(axis='both', which='major', labelsize=14)
-    ax.tick_params(axis='both', which='minor', labelsize=12)
+# ── Figure 2: periodogram ─────────────────────────────────────────────────────
+fig2, ax_pg = plt.subplots(figsize=(10, 5))
 
-fig.tight_layout()
+ax_pg.plot(f_k_filtered, np.sqrt(S_phasediff_filtered), color='steelblue', lw=1.5)
+ax_pg.set_xlabel('$f$ [Hz]', fontsize=16)
+ax_pg.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=16)
+ax_pg.tick_params(labelsize=13)
+
+fig2.tight_layout()
 plt.show()
-
-plt.figure()
-plt.plot(f_k_filtered, np.sqrt(S_phasediff_filtered), 'b')
-plt.xlabel('$f$[Hz]', fontsize=16)
-plt.ylabel('$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=16)
