@@ -124,7 +124,7 @@ print("Computing LS...")
 S_ls = ls_psd(t_good, phases_good, f_grid)
 
 # ── plot style ────────────────────────────────────────────────────────────────
-warm_background = True   # set True to use off-white background (#fdfcf3) on all plots
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
 if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'

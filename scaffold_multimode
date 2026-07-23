@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Scaffold GGN simulation — linearly varying oscillation amplitude.
-Amplitude rises from A_bottom=1 µm at z=0 to A_top=1 mm at z=10 m.
-Each member displaced by A_i * alpha(t) in x, where alpha=cos(2π f t).
+Scaffold GGN simulation — multiple simultaneous oscillation modes.
+
+Each mode shares the same linear amplitude profile (A_bottom at z=0,
+A_top at z=H_total) but has its own frequency and scale factor.
+The total x-displacement of member i at time t is:
+
+    x_i(t) = A_i * alpha(t),   alpha(t) = Σ_m scale_m * cos(2π f_m t + phase_m)
+
+Because alpha is still a scalar, the same single V(alpha, z) grid
+from scaffold works exactly — only alpha_func and its range change.
 """
 
 import numpy as np
@@ -38,7 +45,6 @@ h = L_cube / 2.0
 
 members = []
 
-# 4 vertical columns
 H_col = N_cubes * L_cube
 M_col = rho_steel * np.pi * R_edge**2 * H_col
 for sy in (-1, 1):
@@ -48,7 +54,6 @@ for sy in (-1, 1):
             'M': M_col, 'R': R_edge, 'H': H_col, 'axis': 'z'
         })
 
-# (N_cubes + 1) horizontal rings
 for k in range(N_cubes + 1):
     z_ring = k * L_cube
     for sy in (-1, 1):
@@ -74,10 +79,21 @@ amplitudes = np.array([
     for m in members
 ])
 
-print(f"\nAmplitude profile:")
-print(f"  Vertical columns (centre z=5 m): A = {amplitudes[0]*1e3:.3f} mm")
-print(f"  Bottom ring (z=0):               A = {amplitudes[4]*1e6:.3f} µm")
-print(f"  Top ring (z=10 m):               A = {amplitudes[-1]*1e3:.3f} mm")
+# ── Oscillation modes ─────────────────────────────────────────────────────────
+# Each mode: frequency [Hz], scale (multiplies the base amplitude profile),
+# and an optional phase offset [rad].
+modes = [
+    dict(f=22.4, scale=1.0,  phase=0.0),
+    dict(f=5.0,  scale=0.4,  phase=0.0),
+    dict(f=50.0, scale=0.2,  phase=0.0),
+]
+
+def alpha_func(t):
+    return sum(m['scale'] * np.cos(2 * np.pi * m['f'] * t + m['phase'])
+               for m in modes)
+
+# Grid must span the worst-case excursion of alpha
+alpha_max = sum(abs(m['scale']) for m in modes)
 
 # ── Gravitational potential of a single cylinder ──────────────────────────────
 def cylinder_potential(x, y, z, cx, cy, cz, M, R, H, axis='z'):
@@ -98,16 +114,11 @@ def cylinder_potential(x, y, z, cx, cy, cz, M, R, H, axis='z'):
 
 
 def scaffold_potential_mode(x, y, z, alpha, members, amplitudes):
-    """
-    Total potential at (x, y, z). Each member i is displaced in x by A_i * alpha,
-    where alpha = cos(2π f t) is the mode coordinate.
-    Scaffold centred at x=0 (atoms on axis — signal is second-order in alpha).
-    """
     V = 0.0
     for m, A_i in zip(members, amplitudes):
         V += cylinder_potential(
             x, y, z,
-            m['dx'] + A_i * alpha,   # x_0_centre = 0
+            m['dx'] + A_i * alpha,
             m['dy'], m['dz'],
             m['M'], m['R'], m['H'], m['axis']
         )
@@ -171,17 +182,18 @@ print(f"\nAtom trajectories:")
 print(f"  IFO 1 upper arm max height: {upper1.max():.2f} m")
 print(f"  IFO 2 upper arm max height: {upper2.max():.2f} m")
 
-# ── Oscillation parameters ────────────────────────────────────────────────────
-f_osc = 22.4  # Hz
-
-# ── Potential grid over alpha ─────────────────────────────────────────────────
+# ── Potential grid ────────────────────────────────────────────────────────────
 n_zgrid    = 30
 n_alpha    = 12
 z_min_phys = 0.0
 z_max_phys = max(upper1.max(), upper2.max()) + 0.5
 z_grid     = np.linspace(z_min_phys, z_max_phys, n_zgrid)
-alpha_grid = np.linspace(-1, 1, n_alpha)
+alpha_grid = np.linspace(-alpha_max, alpha_max, n_alpha)
 
+print(f"\nModes:")
+for m in modes:
+    print(f"  f={m['f']} Hz, scale={m['scale']}, phase={m['phase']:.2f} rad")
+print(f"alpha range: [{-alpha_max:.2f}, {alpha_max:.2f}]")
 print(f"\nPrecomputing potential grid ({n_alpha} x {n_zgrid} = {n_alpha*n_zgrid} points,"
       f" {len(members)} members each) ...")
 
@@ -194,9 +206,6 @@ for i, alpha in enumerate(alpha_grid):
 V_interp = RectBivariateSpline(alpha_grid, z_grid, V_grid)
 
 # ── Phase difference ──────────────────────────────────────────────────────────
-def alpha_func(t):
-    return np.cos(2 * np.pi * f_osc * t)
-
 subsample_times = np.arange(2*T, timestep.max(), 2)
 
 print(f"\nComputing phase differences ({len(subsample_times)} measurements) ...")
