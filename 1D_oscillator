@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 M = 1
 g = 9.81
 dt = 0.01
-
+############
 u_initial = 3.86
 m_atom = 1.46e-25
 hbar = 1.055e-34
@@ -21,7 +21,7 @@ T = 0.73
 n = 1000
 velocity_boost = n * hbar * wavenumber / m_atom
 G = 6.67e-11
-
+##############
 
 T_total = 10000
 timestep = np.arange(0, T_total, dt)
@@ -207,7 +207,7 @@ fig1.tight_layout()
 # ── Figure 2: periodogram ─────────────────────────────────────────────────────
 fig2, ax_pg = plt.subplots(figsize=(10, 5))
 
-ax_pg.plot(f_k_filtered, np.sqrt(S_phasediff_filtered), color='steelblue', lw=1.5)
+ax_pg.plot(f_k_filtered, np.sqrt(S_phasediff_filtered), color='firebrick', lw=1.5)
 ax_pg.set_xlabel('$f$ [Hz]', fontsize=16)
 ax_pg.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=16)
 ax_pg.tick_params(labelsize=13)

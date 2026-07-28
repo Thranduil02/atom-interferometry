@@ -1,0 +1,130 @@
+"""
+Cycle-time jitter sweep: naive FFT vs Lomb-Scargle recovery of a fixed
+oscillator signal, for cycle-time jitter amplitudes of 0.1, 0.2 and 0.3 s.
+
+Cycle time for each realization: T_c ~ Uniform(T_nom - jitter, T_nom + jitter),
+with T_nom = 2.0 s. Larger jitter means less uniform sampling of the
+measurement times, so the naive FFT periodogram (which assumes uniform
+spacing) increasingly smears/leaks while Lomb-Scargle stays clean.
+
+Physics model reused as-is from "cycle jitter".
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81; M = 1; h_0 = 1; D_0 = 5; A = 1; f_sig = 0.1
+u0 = 3.86; dt = 0.01; T = 0.73
+
+T_fly = 2 * T          # fixed interferometry window duration
+N_fly = int(round(T_fly / dt))   # samples in [0, 2T]
+t_local = np.arange(N_fly) * dt  # local time grid [0, 2T)
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    """Arm positions on the local [0, 2T) grid. Returns array of length N_fly."""
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+# ── pre-compute arm positions for one cycle (reused for every cycle) ───────────
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(5, 5, upper=False)
+upper2_loc = arm_positions(5, 5, upper=True)
+
+# ── LS helper ─────────────────────────────────────────────────────────────────
+def ls_psd(t, y, freqs):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    w = 2 * np.pi * freqs
+    wt = np.outer(w, t)
+    tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
+    sh = wt - (w * tau)[:, None]
+    ct = np.cos(sh);  st = np.sin(sh)
+    C = ct @ y;  S = st @ y
+    CC = (ct**2).sum(1);  SS = (st**2).sum(1)
+    return dt_eff * 0.5 * (C**2 / CC + S**2 / SS)
+
+# ── run one jitter realization: cycle times, phases, FFT + LS periodograms ─────
+T_nom = 2.0
+N_cycles = 1500
+
+def run_cycle(jitter, seed=0):
+    rng = np.random.default_rng(seed)
+    T_cycles = rng.uniform(T_nom - jitter, T_nom + jitter, N_cycles)
+
+    t_starts = np.concatenate([[0.0], np.cumsum(T_cycles[:-1])])
+    t_meas = t_starts + T_fly  # non-uniform measurement times
+
+    phases = np.zeros(N_cycles)
+    for k in range(N_cycles):
+        t_abs = t_starts[k] + t_local
+        h_k = h_0 + A * np.cos(2*np.pi * f_sig * t_abs)
+        pd1 = V(upper1_loc, h_k) - V(lower1_loc, h_k)
+        pd2 = V(upper2_loc, h_k) - V(lower2_loc, h_k)
+        phases[k] = (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local)
+
+    # Lomb-Scargle on the true non-uniform measurement times
+    T_span = t_meas[-1] - t_meas[0]
+    dt_median = np.median(np.diff(t_meas))
+    f_min = 0.5 / T_span
+    f_max = 1.0 / dt_median
+    f_grid = np.linspace(f_min, f_max, 7500)
+    S_ls = ls_psd(t_meas, phases, f_grid)
+
+    # naive FFT, treating the measurements as if uniformly spaced
+    dt_eff = T_span / (N_cycles - 1)
+    f_fft = np.fft.rfftfreq(N_cycles, d=dt_eff)
+    S_fft = (dt_eff / N_cycles) * np.abs(np.fft.rfft(phases - phases.mean()))**2
+    mask = (f_fft > 0) & (f_fft <= f_max)
+    f_fft, S_fft = f_fft[mask], S_fft[mask]
+
+    return f_fft, S_fft, f_grid, S_ls
+
+jitters = [0.1, 0.2, 0.3]
+results = [run_cycle(j) for j in jitters]
+
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
+# ── stacked FFT vs LS comparison, one panel per jitter level ───────────────────
+fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+for i, (ax, jitter, (f_fft, S_fft, f_grid, S_ls)) in enumerate(zip(axes, jitters, results)):
+    ax.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=1.2, label='Lomb-Scargle')
+    ax.plot(f_fft, np.sqrt(S_fft), color='steelblue', lw=1.2, label='naive FFT')
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=13)
+    ax.set_title(rf'$\delta = \pm${jitter:g} s', fontsize=13)
+    ax.tick_params(labelsize=11)
+    if i == 0:
+        ax.legend(fontsize=10)
+
+axes[-1].set_xlabel('$f$ [Hz]', fontsize=14)
+axes[-1].set_xlim(0, 0.5)
+fig.tight_layout()
+plt.show()
