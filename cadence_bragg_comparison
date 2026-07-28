@@ -1,0 +1,154 @@
+"""
+Random jitter vs periodic alternating cadence: Lomb-Scargle periodograms.
+
+Panels 1-2: cycle times T_c ~ Uniform(T_nom - delta, T_nom + delta),
+delta = 0.3 s, for N = 1,000 and N = 10,000 cycles. Random (uncorrelated)
+timing jitter gives a diffuse noise floor around the signal peak -- the
+timing-domain analogue of diffuse/amorphous scattering, which narrows
+relative to the peak as N grows.
+
+Panel 3: cycle times alternate deterministically, T = 2.0, 2.5, 2.0, 2.5, ...
+s, run for a total span of 10,000 s. This periodic (not random) sampling
+pattern produces sharp aliasing sidebands at f_sig +/- k/T_super, where
+T_super = 4.5 s is the period of the alternation -- the analogue of Bragg
+diffraction peaks from a periodic lattice, as opposed to the diffuse floor
+from random jitter.
+
+Physics model (arm trajectories, potential, Lomb-Scargle estimator) reused
+from "cycle jitter" / cycle_jitter_sweep.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81; M = 1; h_0 = 1; D_0 = 5; A = 1; f_sig = 0.1
+u0 = 3.86; dt = 0.01; T = 0.73
+
+T_fly = 2 * T          # fixed interferometry window duration
+N_fly = int(round(T_fly / dt))   # samples in [0, 2T]
+t_local = np.arange(N_fly) * dt  # local time grid [0, 2T)
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    """Arm positions on the local [0, 2T) grid. Returns array of length N_fly."""
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+# ── pre-compute arm positions for one cycle (reused for every cycle) ───────────
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(5, 5, upper=False)
+upper2_loc = arm_positions(5, 5, upper=True)
+
+# ── phase signal, vectorized over all cycles at once ────────────────────────────
+def phases_for(t_starts):
+    t_abs = t_starts[:, None] + t_local[None, :]           # (N, N_fly)
+    h = h_0 + A * np.cos(2*np.pi * f_sig * t_abs)           # (N, N_fly)
+    pd1 = V(upper1_loc, h) - V(lower1_loc, h)
+    pd2 = V(upper2_loc, h) - V(lower2_loc, h)
+    return (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local, axis=1)
+
+# ── Lomb-Scargle periodogram, batched over frequency to bound memory ───────────
+def ls_psd(t, y, freqs, batch=200):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    S = np.empty_like(freqs)
+    for i0 in range(0, len(freqs), batch):
+        f_b = freqs[i0:i0 + batch]
+        w = 2 * np.pi * f_b
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
+        sh = wt - (w * tau)[:, None]
+        ct = np.cos(sh);  st = np.sin(sh)
+        C = ct @ y;  Sn = st @ y
+        CC = (ct**2).sum(1);  SS = (st**2).sum(1)
+        S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
+    return S
+
+def freq_grid(f_lo, f_hi, n_freq=22000):
+    return np.linspace(f_lo, f_hi, n_freq)
+
+# ── cadence generators ───────────────────────────────────────────────────────
+T_nom = 2.0
+
+def random_cadence(delta, N_cycles, seed=0):
+    rng = np.random.default_rng(seed)
+    T_cycles = rng.uniform(T_nom - delta, T_nom + delta, N_cycles)
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+def alternating_cadence(t_span, t_a=2.0, t_b=2.5):
+    T_cycles, total, toggle = [], 0.0, True
+    while total < t_span:
+        step = t_a if toggle else t_b
+        T_cycles.append(step)
+        total += step
+        toggle = not toggle
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+# ── shared frequency range for all three panels ────────────────────────────────
+F_LO, F_HI = 1e-3, 0.5
+ALIAS_LO, ALIAS_HI = 0.335, 0.488   # alias region highlighted on panels 1-2
+
+# ── panel 1 & 2: random jitter, delta = 0.3 s, N = 10,000 / 100,000 ────────────
+delta = 0.3
+t_meas_1 = random_cadence(delta, 1_000)
+t_meas_2 = random_cadence(delta, 10_000)
+
+f_grid_1 = freq_grid(F_LO, F_HI)
+f_grid_2 = freq_grid(F_LO, F_HI)
+
+S_1 = ls_psd(t_meas_1, phases_for(t_meas_1 - T_fly), f_grid_1)
+S_2 = ls_psd(t_meas_2, phases_for(t_meas_2 - T_fly), f_grid_2)
+
+# ── panel 3: alternating cadence 2.0/2.5 s, total span 10,000 s ────────────────
+t_meas_3 = alternating_cadence(10_000, t_a=2.0, t_b=2.5)
+f_grid_3 = freq_grid(F_LO, F_HI)
+S_3 = ls_psd(t_meas_3, phases_for(t_meas_3 - T_fly), f_grid_3)
+
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
+fig, axes = plt.subplots(3, 1, figsize=(10, 13))
+
+panels = [
+    (axes[0], f_grid_1, S_1, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 1{{,}}000$'),
+    (axes[1], f_grid_2, S_2, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 10{{,}}000$'),
+    (axes[2], f_grid_3, S_3, r'Alternating cadence $T = 2.0/2.5$ s (Bragg peaks)'),
+]
+
+for i, (ax, f_grid, S, title) in enumerate(panels):
+    ax.plot(f_grid, np.sqrt(S), color='firebrick', lw=1.0)
+    if i < 2:
+        ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
+    ax.set_xlabel('$f$ [Hz]', fontsize=13)
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=13)
+    ax.set_title(title, fontsize=13)
+    ax.tick_params(labelsize=11)
+
+fig.tight_layout()
+plt.show()
