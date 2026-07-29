@@ -97,31 +97,19 @@ for k in range(N_total):
     phases_all[k] = ((m_atom/hbar)*np.trapezoid(pd1-pd2, t_local)
                      + uldm_phase(t_all[k]))
 
-# ── apply failure mask for the main p_fail ────────────────────────────────────
-survived   = rng.random(N_total) >= p_fail
-N_survived = survived.sum()
-print(f"Shots attempted : {N_total}")
-print(f"Shots failed    : {(~survived).sum()}  ({100*p_fail:.0f}% rate)")
-print(f"Shots surviving : {N_survived}  ({100*N_survived/N_total:.1f}%)")
-
-t_good      = t_all[survived]
-phases_good = phases_all[survived]
-
-# ── FFT: treat surviving shots as uniformly spaced (naive approach) ───────────
-# Pretends the gaps don't exist — surviving phases compressed together
-# as if each follows T_cyc after the last, ignoring missing slots.
-y_fft   = phases_good - phases_good.mean()
-f_fft   = np.fft.rfftfreq(N_survived, d=T_cyc)
-S_fft   = (T_cyc/N_survived) * np.abs(np.fft.rfft(y_fft))**2
-f_nyq   = 1/(2*T_cyc)
-mask_fft = (f_fft > 0) & (f_fft <= f_nyq)
-
-# ── LS: on surviving timestamps only ─────────────────────────────────────────
+# ── shared frequency grid (used for both figures) ─────────────────────────────
+f_nyq  = 1/(2*T_cyc)
 f_max  = f_nyq + 0.05
-f_grid = np.linspace(0.5/(N_survived*T_cyc), f_max, 8000)
+f_grid = np.linspace(0.5/(N_total*T_cyc), f_max, 8000)
 
-print("Computing LS...")
-S_ls = ls_psd(t_good, phases_good, f_grid)
+_peak_mask = (
+    ((f_grid >= f_sig  - 0.02) & (f_grid <= f_sig  + 0.02)) |
+    ((f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01))
+)
+_mask_uldm_peak = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
+
+def noise_floor(S):
+    return np.median(np.sqrt(S[~_peak_mask]))
 
 # ── plot style ────────────────────────────────────────────────────────────────
 warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
@@ -129,162 +117,83 @@ if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
-# ── figure ─────────────────────────────────────────────────────────────────────
-fig, (ax_f, ax_l) = plt.subplots(1, 2, figsize=(14, 5))
+# ── figure 1: stack of 3 panels, naive FFT + LS overlaid, p_fail = 1/5/10% ─────
+p_list = [0.01, 0.05, 0.10]
+labels = ['1 %', '5 %', '10 %']
 
-ax_f.plot(f_fft[mask_fft], np.sqrt(S_fft[mask_fft]),
-          color='steelblue', lw=0.8)
-ax_f.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-             label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
-ax_f.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-             label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
-ax_f.axvline(f_nyq,  ls=':',  color='grey',      lw=1.0,
-             label=f'Nyquist = {f_nyq:.3f} Hz')
-ax_f.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_f.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax_f.set_title(f'FFT — surviving shots treated as uniform\n'
-               f'(gaps ignored, timing errors accumulate)', fontsize=11)
-ax_f.legend(fontsize=9)
+fig, axes = plt.subplots(3, 1, figsize=(10, 13))
 
-ax_l.plot(f_grid, np.sqrt(S_ls), color='seagreen', lw=0.8)
-ax_l.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-             label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
-ax_l.axvline(f_uldm, ls='--', color='firebrick', lw=1.2,
-             label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
-ax_l.set_xlabel('$f$ [Hz]', fontsize=12)
-ax_l.set_title(f'Lomb-Scargle — surviving timestamps only\n'
-               f'(handles gaps correctly, no Nyquist folding)', fontsize=11)
-ax_l.legend(fontsize=9)
+for i, (ax, p, lab) in enumerate(zip(axes, p_list, labels)):
+    survived   = rng.random(N_total) >= p
+    N_survived = survived.sum()
+    t_good      = t_all[survived]
+    phases_good = phases_all[survived]
 
+    # LS on the surviving timestamps only
+    S_ls = ls_psd(t_good, phases_good, f_grid)
+    ax.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=0.8, label='Lomb-Scargle')
+
+    if i == 0:
+        # naive FFT: surviving shots treated as uniformly spaced (gaps ignored)
+        y_fft    = phases_good - phases_good.mean()
+        f_fft    = np.fft.rfftfreq(N_survived, d=T_cyc)
+        S_fft    = (T_cyc/N_survived) * np.abs(np.fft.rfft(y_fft))**2
+        mask_fft = (f_fft > 0) & (f_fft <= f_nyq)
+        ax.plot(f_fft[mask_fft], np.sqrt(S_fft[mask_fft]),
+                color='steelblue', lw=0.8, label='naive FFT')
+
+    ax.axvline(f_sig,  ls='--', color='k',        lw=1.2,
+               label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
+    ax.axvline(f_uldm, ls='--', color='dimgray', lw=1.2,
+               label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=16)
+    ax.set_title(f'Failure rate: {lab}  ($N_\\mathrm{{survived}}={N_survived}$)', fontsize=11)
+    ax.tick_params(labelsize=11)
+    print(f"  p_fail={100*p:.0f}%  N_survived={N_survived}  "
+          f"noise floor = {noise_floor(S_ls):.4e} rad/sqrt(Hz)")
+
+axes[0].legend(fontsize=9)
+axes[-1].set_xlabel('$f$ [Hz]', fontsize=16)
 fig.suptitle(f'Gapped uniform cadence: $N_\\mathrm{{total}}={N_total}$, '
-             f'$p_\\mathrm{{fail}}={100*p_fail:.0f}\\%$, '
-             f'$N_\\mathrm{{survived}}={N_survived}$, '
-             f'$T_\\mathrm{{cyc}}={T_cyc}$ s', fontsize=12)
+             f'$T_\\mathrm{{cyc}}={T_cyc}$ s — naive FFT vs Lomb-Scargle', fontsize=12)
 fig.tight_layout()
 
-# ── terminal summary ───────────────────────────────────────────────────────────
-mask_sig  = (f_grid >= f_sig  - 0.02) & (f_grid <= f_sig  + 0.02)
-mask_uldm = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
-
-print(f"\n{'='*45}")
-print(f"  GGN peak  (LS) : {np.sqrt(S_ls[mask_sig].max()):.4e} rad/sqrt(Hz)")
-print(f"  ULDM peak (LS) : {np.sqrt(ls_psd(t_good, phases_good, np.array([f_uldm]))[0]):.4e} rad/sqrt(Hz)")
-print(f"{'='*45}")
-
-# ── helper: noise floor = median ASD outside signal peaks ────────────────────
-_peak_mask = (
-    ((f_grid >= f_sig  - 0.02) & (f_grid <= f_sig  + 0.02)) |
-    ((f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01))
-)
-
-def noise_floor(S):
-    return np.median(np.sqrt(S[~_peak_mask]))
-
-# ── plot 2: LS for three failure rates overlaid ───────────────────────────────
-p_fails_compare = [0.001, 0.01, 0.10]
-colors_compare  = ['steelblue', 'seagreen', 'firebrick']
-labels_compare  = ['0.1 %', '1 %', '10 %']
-
-fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5), sharey=True)
-for ax, p, col, lab in zip(axes2, p_fails_compare, colors_compare, labels_compare):
-    surv = rng.random(N_total) >= p
-    tg   = t_all[surv]
-    pg   = phases_all[surv]
-    S    = ls_psd(tg, pg, f_grid)
-    ax.plot(f_grid, np.sqrt(S), color=col, lw=0.8)
-    ax.axvline(f_sig,  ls='--', color='k',    lw=1.2,
-               label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
-
-    ax.set_xlabel('$f$ [Hz]', fontsize=12)
-    ax.set_title(f'Failure rate: {lab}', fontsize=11)
-    ax.legend(fontsize=9)
-    print(f"  p_fail={100*p:.1f}%  noise floor = {noise_floor(S):.4e} rad/sqrt(Hz)")
-
-axes2[0].set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-fig2.suptitle('Lomb-Scargle for different shot-failure rates', fontsize=12)
-fig2.tight_layout()
-
-# ── plot 3 & 4: scan failure rates ───────────────────────────────────────────
+# ── figure 2: d_min averaged over multiple realisations (disabled for now) ────
 # ULDM peak ASD scales linearly with d, so d_min = noise_floor / uldm_peak(d=1)
-_mask_uldm_peak = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
-
-p_scan        = np.linspace(0, 0.05, 200)
-floors_median = []
-d_min_scan    = []
-print("\nScanning failure rates for noise-floor and d_min curves...")
-for p in p_scan:
-    surv = rng.random(N_total) >= p
-    tg   = t_all[surv]
-    pg   = phases_all[surv]
-    if len(tg) < 10:
-        floors_median.append(np.nan)
-        d_min_scan.append(np.nan)
-        continue
-    S          = ls_psd(tg, pg, f_grid)
-    asd        = np.sqrt(S)
-    floor      = np.median(asd[~_peak_mask])
-    uldm_peak  = asd[_mask_uldm_peak].max()
-    floors_median.append(floor)
-    d_min_scan.append(floor / uldm_peak)
-
-fig3, ax3 = plt.subplots(figsize=(8, 4))
-ax3.scatter(100*p_scan, floors_median, color='steelblue', s=8)
-ax3.set_xlabel('Missed shots [%]', fontsize=12)
-ax3.set_ylabel(r'Noise floor [rad/$\sqrt{\rm Hz}$]', fontsize=12)
-ax3.set_title('LS noise floor vs shot-failure rate', fontsize=12)
-fig3.tight_layout()
-
-fig4, ax4 = plt.subplots(figsize=(8, 4))
-ax4.scatter(100*p_scan, d_min_scan, color='darkorange', s=8)
-
-# fit d_min = a*sqrt(p) + b
-_valid = ~np.isnan(d_min_scan)
-_X = np.column_stack([np.sqrt(p_scan[_valid]), np.ones(_valid.sum())])
-_a, _b = np.linalg.lstsq(_X, np.array(d_min_scan)[_valid], rcond=None)[0]
-p_fit = np.linspace(0, p_scan.max(), 300)
-ax4.plot(100*p_fit, _a*np.sqrt(p_fit) + _b, color='k', lw=1.5,
-         label=rf'$d_{{\rm min}} = {_a:.3f}\sqrt{{p}} + {_b:.3f}$')
-ax4.legend(fontsize=10)
-
-ax4.set_xlabel('Missed shots [%]', fontsize=12)
-ax4.set_ylabel(r'$d_{\rm min}$', fontsize=12)
-ax4.set_title(r'Minimum detectable $d$ (ULDM peak $=$ noise floor) vs shot-failure rate',
-              fontsize=11)
-fig4.tight_layout()
-
-# ── plot 5: averaged d_min over multiple realisations ────────────────────────
-rng_avg      = np.random.default_rng(99)
-d_min_avg    = []
-print(f"\nAveraging d_min over {N_real} realisations per p value...")
-for p in p_scan:
-    vals = []
-    for _ in range(N_real):
-        surv = rng_avg.random(N_total) >= p
-        tg   = t_all[surv]
-        pg   = phases_all[surv]
-        if len(tg) < 10:
-            continue
-        S         = ls_psd(tg, pg, f_grid)
-        asd       = np.sqrt(S)
-        floor     = np.median(asd[~_peak_mask])
-        uldm_peak = asd[_mask_uldm_peak].max()
-        vals.append(floor / uldm_peak)
-    d_min_avg.append(np.mean(vals) if vals else np.nan)
-
-d_min_avg = np.array(d_min_avg)
-
-_valid2 = ~np.isnan(d_min_avg)
-_X2 = np.column_stack([np.sqrt(p_scan[_valid2]), np.ones(_valid2.sum())])
-_a2, _b2 = np.linalg.lstsq(_X2, d_min_avg[_valid2], rcond=None)[0]
-
-fig5, ax5 = plt.subplots(figsize=(8, 4))
-ax5.scatter(100*p_scan, d_min_avg, color='darkorange', s=8)
-ax5.plot(100*p_fit, _a2*np.sqrt(p_fit) + _b2, color='k', lw=1.5,
-         label=rf'$d_{{\rm min}} = {_a2:.3f}\sqrt{{p}} + {_b2:.3f}$')
-ax5.legend(fontsize=10)
-ax5.set_xlabel('Missed shots [%]', fontsize=12)
-ax5.set_ylabel(r'$d_{\rm min}$', fontsize=12)
-ax5.set_title(rf'$d_{{\rm min}}$ averaged over {N_real} realisations per $p$', fontsize=12)
-fig5.tight_layout()
+# p_scan    = np.linspace(0, 0.05, 200)
+# rng_avg   = np.random.default_rng(99)
+# d_min_avg = []
+# print(f"\nAveraging d_min over {N_real} realisations per p value...")
+# for p in p_scan:
+#     vals = []
+#     for _ in range(N_real):
+#         surv = rng_avg.random(N_total) >= p
+#         tg   = t_all[surv]
+#         pg   = phases_all[surv]
+#         if len(tg) < 10:
+#             continue
+#         S         = ls_psd(tg, pg, f_grid)
+#         asd       = np.sqrt(S)
+#         floor     = np.median(asd[~_peak_mask])
+#         uldm_peak = asd[_mask_uldm_peak].max()
+#         vals.append(floor / uldm_peak)
+#     d_min_avg.append(np.mean(vals) if vals else np.nan)
+#
+# d_min_avg = np.array(d_min_avg)
+#
+# _valid = ~np.isnan(d_min_avg)
+# _X = np.column_stack([np.sqrt(p_scan[_valid]), np.ones(_valid.sum())])
+# _a, _b = np.linalg.lstsq(_X, d_min_avg[_valid], rcond=None)[0]
+# p_fit = np.linspace(0, p_scan.max(), 300)
+#
+# fig2, ax2 = plt.subplots(figsize=(8, 4))
+# ax2.scatter(100*p_scan, d_min_avg, color='firebrick', s=8)
+# ax2.plot(100*p_fit, _a*np.sqrt(p_fit) + _b, color='steelblue', lw=1.5,
+#          label=rf'$d_{{\rm min}} = {_a:.3f}\sqrt{{p}} + {_b:.3f}$')
+# ax2.legend(fontsize=10)
+# ax2.set_xlabel('Missed shots [%]', fontsize=16)
+# ax2.set_ylabel(r'$d_{\rm min}$', fontsize=16)
+# ax2.set_title(rf'$d_{{\rm min}}$ averaged over {N_real} realisations per $p$', fontsize=12)
+# fig2.tight_layout()
 
 plt.show()
