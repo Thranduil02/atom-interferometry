@@ -72,7 +72,7 @@ print(f"Tower: {len(members)} members, total mass = {total_mass:.1f} kg")
 
 # ── Per-member oscillation amplitude (linear in z) ───────────────────────────
 A_bottom = 1e-6   # 1 µm  at z = 0
-A_top    = 1e-3   # 1 mm  at z = H_total
+A_top    = 1e-4   # 1 mm  at z = H_total
 
 amplitudes = np.array([
     A_bottom + (A_top - A_bottom) * m['dz'] / H_total
@@ -83,9 +83,14 @@ amplitudes = np.array([
 # Each mode: frequency [Hz], scale (multiplies the base amplitude profile),
 # and an optional phase offset [rad].
 modes = [
-    dict(f=22.4, scale=1.0,  phase=0.0),
-    dict(f=5.0,  scale=0.4,  phase=0.0),
-    dict(f=50.0, scale=0.2,  phase=0.0),
+    dict(f=38.5, scale=1.0,  phase=0.0),
+    dict(f=26.3,  scale=1,  phase=0.0),
+    dict(f=34.1, scale=1,  phase=0.0),
+    dict(f=42.3, scale=1, phase=0), 
+    dict(f=46.3, scale=1, phase=0), 
+    dict(f=47.4, scale=1, phase=0),
+    dict(f=53.4, scale=1, phase=0),
+    dict(f=54.8, scale=1, phase=0)
 ]
 
 def alpha_func(t):
@@ -161,7 +166,7 @@ def upper_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
     return t, path
 
 # ── Build trajectories ────────────────────────────────────────────────────────
-N  = 50
+N  = 1000
 dt = 0.01
 timestep = np.arange(0, N * 2, dt)
 
