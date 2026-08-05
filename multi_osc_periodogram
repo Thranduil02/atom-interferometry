@@ -21,7 +21,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 10000      # total simulation time [s]
+T_total  = 1e6        # total simulation time [s]
 N_cycles = int(T_total / T_cyc)
 
 # ── GGN oscillators ────────────────────────────────────────────────────────────
@@ -87,25 +87,40 @@ upper2 = arm_positions(5, 5, upper=True)
 t_starts = np.arange(N_cycles) * T_cyc
 t_meas   = t_starts + T_fly
 
-phases = np.zeros(N_cycles)
-print(f"Computing {N_cycles:,} cycles...")
-for k in range(N_cycles):
-    t_abs = t_starts[k] + t_local
-    dphi  = np.zeros(N_fly)
-    for osc in active_oscillators:
-        h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
-        dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
-               - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
-    phases[k] = (m_atom / hbar) * np.trapezoid(dphi, t_local)
+def compute_phases(active_oscs, chunk=50_000):
+    """Vectorized, chunked over cycles to bound memory at large N_cycles."""
+    phases = np.empty(N_cycles)
+    for start in range(0, N_cycles, chunk):
+        end   = min(start + chunk, N_cycles)
+        t_abs = t_starts[start:end][:, None] + t_local[None, :]   # (chunk, N_fly)
+        dphi  = np.zeros_like(t_abs)
+        for osc in active_oscs:
+            h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
+            dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
+                   - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
+        phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
+        print(f"  cycles {end:,}/{N_cycles:,} done", flush=True)
+    return phases
 
+print(f"Computing {N_cycles:,} cycles...")
+phases = compute_phases(active_oscillators)
 if enable_uldm:
     phases += uldm_phase_vec(t_meas)
 
+# ── single 0.1 Hz oscillator, no ULDM (for the new comparison figure) ──────────
+single_oscillator = [dict(name='single', enable=True, f=0.1, amp=1.0, M=1.0, D=3.0, h0=1.0)]
+print(f"Computing {N_cycles:,} cycles (single 0.1 Hz oscillator)...")
+phases_single = compute_phases(single_oscillator)
+
 # ── classical periodogram (FFT) ────────────────────────────────────────────────
-f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
-S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(phases - phases.mean()))**2
-mask = f_k > 0
-f_plot, S_plot = f_k[mask], S_k[mask]
+def periodogram(ph):
+    f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
+    S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(ph - ph.mean()))**2
+    mask = f_k > 0
+    return f_k[mask], S_k[mask]
+
+f_plot, S_plot = periodogram(phases)
+f_single, S_single = periodogram(phases_single)
 
 # ── plot style ─────────────────────────────────────────────────────────────────
 warm_background = False
@@ -123,4 +138,19 @@ ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
 ax.tick_params(labelsize=13)
 
 fig.tight_layout()
+
+# ── figure 2: single 0.1 Hz oscillator (top) vs the multi-osc + ULDM case (bottom)
+fig2, (ax_single, ax_multi) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+
+ax_single.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
+ax_single.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
+ax_single.tick_params(labelsize=13)
+
+ax_multi.plot(f_plot, np.sqrt(S_plot), color='firebrick', lw=1.8)
+ax_multi.set_xlabel('$f$ [Hz]', fontsize=15)
+ax_multi.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
+ax_multi.tick_params(labelsize=13)
+
+fig2.tight_layout()
+
 plt.show()
