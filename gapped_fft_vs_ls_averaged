@@ -12,8 +12,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ── parameters ─────────────────────────────────────────────────────────────────
-N_total  = 2000       # total shots attempted
-T_cyc    = 2.0        # uniform cycle time [s]
+T_cyc    = 2.0                     # uniform cycle time [s]
+N_total  = int(1e6 / T_cyc)        # total shots attempted (total run time ~1e6 s)
 p_fail   = 0.01      # probability of a shot failing
 N_real   = 20         # realisations averaged per p value in fig 5
 rng_seed = 42
@@ -87,15 +87,18 @@ all_idx = np.arange(N_total)
 t_all   = all_idx * T_cyc + T_fly
 
 print("Computing phases for all shots...")
-phases_all = np.zeros(N_total)
-for k in range(N_total):
-    t_start = k * T_cyc
-    t_abs   = t_start + t_local
-    h_k     = h_0 + A*np.cos(2*np.pi*f_sig*t_abs)
-    pd1     = V(upper1, h_k) - V(lower1, h_k)
-    pd2     = V(upper2, h_k) - V(lower2, h_k)
-    phases_all[k] = ((m_atom/hbar)*np.trapezoid(pd1-pd2, t_local)
-                     + uldm_phase(t_all[k]))
+phases_all = np.empty(N_total)
+chunk = 50_000   # bounds memory: chunk * N_fly elements per temporary array
+for start in range(0, N_total, chunk):
+    end      = min(start + chunk, N_total)
+    t_starts = all_idx[start:end] * T_cyc
+    t_abs    = t_starts[:, None] + t_local[None, :]        # (chunk, N_fly)
+    h_k      = h_0 + A*np.cos(2*np.pi*f_sig*t_abs)
+    pd1      = V(upper1, h_k) - V(lower1, h_k)
+    pd2      = V(upper2, h_k) - V(lower2, h_k)
+    phases_all[start:end] = ((m_atom/hbar)*np.trapezoid(pd1-pd2, t_local, axis=1)
+                              + uldm_phase(t_all[start:end]))
+    print(f"  shots {end}/{N_total} done", flush=True)
 
 # ── shared frequency grid (used for both figures) ─────────────────────────────
 f_nyq  = 1/(2*T_cyc)
@@ -117,13 +120,13 @@ if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
-# ── figure 1: stack of 3 panels, naive FFT + LS overlaid, p_fail = 1/5/10% ─────
-p_list = [0.01, 0.05, 0.10]
-labels = ['1 %', '5 %', '10 %']
+# ── figure 1: 2 stacked panels, Lomb-Scargle only, p_fail = 1/10% ──────────────
+p_list = [0.01, 0.10]
+labels = ['1 %', '10 %']
 
-fig, axes = plt.subplots(3, 1, figsize=(10, 13))
+fig, axes = plt.subplots(2, 1, figsize=(10, 9))
 
-for i, (ax, p, lab) in enumerate(zip(axes, p_list, labels)):
+for ax, p, lab in zip(axes, p_list, labels):
     survived   = rng.random(N_total) >= p
     N_survived = survived.sum()
     t_good      = t_all[survived]
@@ -133,19 +136,6 @@ for i, (ax, p, lab) in enumerate(zip(axes, p_list, labels)):
     S_ls = ls_psd(t_good, phases_good, f_grid)
     ax.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=0.8, label='Lomb-Scargle')
 
-    if i == 0:
-        # naive FFT: surviving shots treated as uniformly spaced (gaps ignored)
-        y_fft    = phases_good - phases_good.mean()
-        f_fft    = np.fft.rfftfreq(N_survived, d=T_cyc)
-        S_fft    = (T_cyc/N_survived) * np.abs(np.fft.rfft(y_fft))**2
-        mask_fft = (f_fft > 0) & (f_fft <= f_nyq)
-        ax.plot(f_fft[mask_fft], np.sqrt(S_fft[mask_fft]),
-                color='steelblue', lw=0.8, label='naive FFT')
-
-    ax.axvline(f_sig,  ls='--', color='k',        lw=1.2,
-               label=rf'$f_{{\rm GGN}} = {f_sig}$ Hz')
-    ax.axvline(f_uldm, ls='--', color='dimgray', lw=1.2,
-               label=rf'$f_{{\rm ULDM}} = {f_uldm}$ Hz')
     ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\rm Hz}$]', fontsize=16)
     ax.set_title(f'Failure rate: {lab}  ($N_\\mathrm{{survived}}={N_survived}$)', fontsize=11)
     ax.tick_params(labelsize=11)
@@ -155,7 +145,7 @@ for i, (ax, p, lab) in enumerate(zip(axes, p_list, labels)):
 axes[0].legend(fontsize=9)
 axes[-1].set_xlabel('$f$ [Hz]', fontsize=16)
 fig.suptitle(f'Gapped uniform cadence: $N_\\mathrm{{total}}={N_total}$, '
-             f'$T_\\mathrm{{cyc}}={T_cyc}$ s — naive FFT vs Lomb-Scargle', fontsize=12)
+             f'$T_\\mathrm{{cyc}}={T_cyc}$ s — Lomb-Scargle', fontsize=12)
 fig.tight_layout()
 
 # ── figure 2: d_min averaged over multiple realisations (disabled for now) ────
