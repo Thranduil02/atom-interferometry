@@ -83,14 +83,14 @@ amplitudes = np.array([
 # Each mode: frequency [Hz], scale (multiplies the base amplitude profile),
 # and an optional phase offset [rad].
 modes = [
-    dict(f=38.5, scale=1.0,  phase=0.0),
-    dict(f=26.3,  scale=1,  phase=0.0),
-    dict(f=34.1, scale=1,  phase=0.0),
-    dict(f=42.3, scale=1, phase=0), 
-    dict(f=46.3, scale=1, phase=0), 
-    dict(f=47.4, scale=1, phase=0),
-    dict(f=53.4, scale=1, phase=0),
-    dict(f=54.8, scale=1, phase=0)
+    dict(f=2.30, scale=1.0,  phase=0.0),
+    dict(f=2.34,  scale=1,  phase=0.0),
+    dict(f=12.7, scale=1,  phase=0.0),
+    dict(f=35.1, scale=1, phase=0),
+    dict(f=37.0, scale=1, phase=0),
+    dict(f=38.7, scale=1, phase=0),
+    dict(f=39.4, scale=1, phase=0),
+    dict(f=40.5, scale=1, phase=0)
 ]
 
 def alpha_func(t):
@@ -166,7 +166,7 @@ def upper_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
     return t, path
 
 # ── Build trajectories ────────────────────────────────────────────────────────
-N  = 1000
+N  = 50_000
 dt = 0.01
 timestep = np.arange(0, N * 2, dt)
 
