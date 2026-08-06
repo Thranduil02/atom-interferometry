@@ -69,7 +69,7 @@ def ls_psd(t, y, freqs):
 
 # ── run one jitter realization: cycle times, phases, FFT + LS periodograms ─────
 T_nom = 2.0
-N_cycles = 1500
+N_cycles = 10000
 
 def run_cycle(jitter, seed=0):
     rng = np.random.default_rng(seed)
@@ -127,4 +127,20 @@ for i, (ax, jitter, (f_fft, S_fft, f_grid, S_ls)) in enumerate(zip(axes, jitters
 axes[-1].set_xlabel('$f$ [Hz]', fontsize=14)
 axes[-1].set_xlim(0, 0.5)
 fig.tight_layout()
+
+# ── same comparison but LS-only (no FFT) ────────────────────────────────────────
+fig2, axes2 = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+for i, (ax, jitter, (f_fft, S_fft, f_grid, S_ls)) in enumerate(zip(axes2, jitters, results)):
+    ax.plot(f_grid, np.sqrt(S_ls), color='firebrick', lw=1.2, label='Lomb-Scargle')
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=13)
+    ax.set_title(rf'$\delta = \pm${jitter:g} s', fontsize=13)
+    ax.tick_params(labelsize=11)
+    if i == 0:
+        ax.legend(fontsize=10)
+
+axes2[-1].set_xlabel('$f$ [Hz]', fontsize=14)
+axes2[-1].set_xlim(0, 0.5)
+fig2.tight_layout()
+
 plt.show()
