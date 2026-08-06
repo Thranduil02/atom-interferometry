@@ -87,8 +87,23 @@ def ls_psd(t, y, freqs, batch=200):
         S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
     return S
 
-def freq_grid(f_lo, f_hi, n_freq=22000):
-    return np.linspace(f_lo, f_hi, n_freq)
+def freq_grid(f_lo, f_hi, t_meas, f_centers, n_coarse=4000, zoom_cycles=30, n_fine=300):
+    """Coarse grid over [f_lo, f_hi] plus finely-oversampled windows around
+    each frequency in f_centers. The LS periodogram's native linewidth is
+    ~1/T_span, which shrinks as T_span grows with N_cycles; a fixed coarse
+    grid undersamples narrow peaks at large N and reports an artificially
+    low height, so known peak/sideband locations are resolved explicitly
+    with a local zoom instead of brute-forcing fine resolution everywhere."""
+    coarse     = np.linspace(f_lo, f_hi, n_coarse)
+    T_span     = t_meas[-1] - t_meas[0]
+    df_native  = 1.0 / T_span
+    half_width = zoom_cycles * df_native
+    pieces     = [coarse]
+    for fc in f_centers:
+        if f_lo <= fc <= f_hi:
+            pieces.append(np.linspace(max(f_lo, fc - half_width),
+                                       min(f_hi, fc + half_width), n_fine))
+    return np.unique(np.concatenate(pieces))
 
 # ── cadence generators ───────────────────────────────────────────────────────
 T_nom = 2.0
@@ -111,20 +126,29 @@ def alternating_cadence(t_span, t_a=2.0, t_b=2.5):
 F_LO, F_HI = 1e-3, 0.5
 ALIAS_LO, ALIAS_HI = 0.335, 0.488   # alias region highlighted on panels 1-2
 
-# ── panel 1 & 2: random jitter, delta = 0.3 s, N = 10,000 / 100,000 ────────────
+# ── panel 1 & 2: random jitter, delta = 0.3 s, N = 1,000 / 100,000 ─────────────
 delta = 0.3
 t_meas_1 = random_cadence(delta, 1_000)
-t_meas_2 = random_cadence(delta, 10_000)
+t_meas_2 = random_cadence(delta, 100_000)
 
-f_grid_1 = freq_grid(F_LO, F_HI)
-f_grid_2 = freq_grid(F_LO, F_HI)
+f_grid_1 = freq_grid(F_LO, F_HI, t_meas_1, f_centers=[f_sig])
+f_grid_2 = freq_grid(F_LO, F_HI, t_meas_2, f_centers=[f_sig], n_coarse=40000)
 
 S_1 = ls_psd(t_meas_1, phases_for(t_meas_1 - T_fly), f_grid_1)
 S_2 = ls_psd(t_meas_2, phases_for(t_meas_2 - T_fly), f_grid_2)
 
-# ── panel 3: alternating cadence 2.0/2.5 s, total span 10,000 s ────────────────
-t_meas_3 = alternating_cadence(10_000, t_a=2.0, t_b=2.5)
-f_grid_3 = freq_grid(F_LO, F_HI)
+# ── panel 3: alternating cadence 2.0/2.5 s, total span 100,000 s ───────────────
+t_a, t_b = 2.0, 2.5
+T_super  = t_a + t_b   # period of the alternation
+t_meas_3 = alternating_cadence(100_000, t_a=t_a, t_b=t_b)
+
+# Bragg sidebands at f_sig +/- k/T_super (folded into [F_LO, F_HI])
+bragg_centers = sorted({
+    fc for k in range(4)
+    for fc in (f_sig + k / T_super, abs(f_sig - k / T_super))
+    if F_LO <= fc <= F_HI
+})
+f_grid_3 = freq_grid(F_LO, F_HI, t_meas_3, f_centers=bragg_centers)
 S_3 = ls_psd(t_meas_3, phases_for(t_meas_3 - T_fly), f_grid_3)
 
 # ── plot style ────────────────────────────────────────────────────────────────
@@ -137,7 +161,7 @@ fig, axes = plt.subplots(3, 1, figsize=(10, 13))
 
 panels = [
     (axes[0], f_grid_1, S_1, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 1{{,}}000$'),
-    (axes[1], f_grid_2, S_2, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 10{{,}}000$'),
+    (axes[1], f_grid_2, S_2, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 100{{,}}000$'),
     (axes[2], f_grid_3, S_3, r'Alternating cadence $T = 2.0/2.5$ s (Bragg peaks)'),
 ]
 
