@@ -26,9 +26,9 @@ N_cycles = int(T_total / T_cyc)
 
 # ── GGN oscillators ────────────────────────────────────────────────────────────
 oscillators = [
-    dict(name='A', enable=True,  f=0.13, amp=1.0, M=1.0, D=3.0, h0= 1.0),
-    dict(name='B', enable=True,  f=0.07, amp=1.0, M=1.0, D=2.0, h0= 3.0),
-    dict(name='C', enable=False, f=0.20, amp=1.0, M=1.0, D=3.0, h0=-3.0),
+    dict(name='A', enable=True, f=0.12, amp=1.0, M=1.0, D=3.0, h0= 1.0),
+    dict(name='B', enable=True, f=0.07, amp=1.0, M=1.0, D=2.0, h0= 3.0),
+    dict(name='C', enable=True, f=0.20, amp=1.0, M=1.0, D=3.0, h0=-3.0),
 ]
 active_oscillators = [o for o in oscillators if o['enable']]
 
@@ -36,7 +36,7 @@ active_oscillators = [o for o in oscillators if o['enable']]
 enable_uldm = True
 f_uldm      = 0.1
 G_nat       = 6.708e-39
-d_e         = 1;  d_m_e      = 1
+d_e         = 1e-3;  d_m_e      = 1e-3
 m_phi       = 4e-16;  rho_phi = 0.3
 theta       = np.pi / 2;  xi  = 0.06
 omega_A     = 2.67e15
@@ -103,13 +103,17 @@ def compute_phases(active_oscs, chunk=50_000):
     return phases
 
 print(f"Computing {N_cycles:,} cycles...")
-phases = compute_phases(active_oscillators)
+phases_multi = compute_phases(active_oscillators)
+phases = phases_multi.copy()
 if enable_uldm:
     phases += uldm_phase_vec(t_meas)
 
-# ── single 0.1 Hz oscillator, no ULDM (for the new comparison figure) ──────────
-single_oscillator = [dict(name='single', enable=True, f=0.1, amp=1.0, M=1.0, D=3.0, h0=1.0)]
-print(f"Computing {N_cycles:,} cycles (single 0.1 Hz oscillator)...")
+# ── ULDM-only signal (no GGN oscillators) ───────────────────────────────────────
+phases_uldm = uldm_phase_vec(t_meas)
+
+# ── single 0.12 Hz oscillator, ~10 g, 0.1 m amplitude, no ULDM ──────────────────
+single_oscillator = [dict(name='single', enable=True, f=0.12, amp=0.1, M=0.01, D=3.0, h0=1.0)]
+print(f"Computing {N_cycles:,} cycles (single 0.12 Hz oscillator)...")
 phases_single = compute_phases(single_oscillator)
 
 # ── classical periodogram (FFT) ────────────────────────────────────────────────
@@ -121,6 +125,8 @@ def periodogram(ph):
 
 f_plot, S_plot = periodogram(phases)
 f_single, S_single = periodogram(phases_single)
+f_uldm, S_uldm = periodogram(phases_uldm)
+f_three, S_three = periodogram(phases_multi)
 
 # ── plot style ─────────────────────────────────────────────────────────────────
 warm_background = False
@@ -133,23 +139,30 @@ fig, ax = plt.subplots(figsize=(11, 5))
 
 ax.plot(f_plot, np.sqrt(S_plot), color='firebrick', lw=1.8)
 
-ax.set_xlabel('$f$ [Hz]', fontsize=15)
-ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
+ax.set_xlabel('$f$ [Hz]', fontsize=18)
+ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax.tick_params(labelsize=13)
 
 fig.tight_layout()
 
-# ── figure 2: single 0.1 Hz oscillator (top) vs the multi-osc + ULDM case (bottom)
-fig2, (ax_single, ax_multi) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+# ── figure 2: ULDM only (top) vs single 0.12 Hz oscillator (middle) vs three
+#    GGN oscillators at 0.12/0.07/0.20 Hz (bottom) ──────────────────────────────
+fig2, (ax_uldm, ax_single, ax_three) = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+
+ax_uldm.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax_uldm.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_uldm.tick_params(labelsize=13)
+ax_uldm.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
+             transform=ax_uldm.transAxes, ha='right', va='top', fontsize=13)
 
 ax_single.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
-ax_single.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
+ax_single.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax_single.tick_params(labelsize=13)
 
-ax_multi.plot(f_plot, np.sqrt(S_plot), color='firebrick', lw=1.8)
-ax_multi.set_xlabel('$f$ [Hz]', fontsize=15)
-ax_multi.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=15)
-ax_multi.tick_params(labelsize=13)
+ax_three.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax_three.set_xlabel('$f$ [Hz]', fontsize=18)
+ax_three.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_three.tick_params(labelsize=13)
 
 fig2.tight_layout()
 
