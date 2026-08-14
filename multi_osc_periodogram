@@ -126,7 +126,7 @@ def periodogram(ph):
 f_plot, S_plot = periodogram(phases)
 f_single, S_single = periodogram(phases_single)
 f_uldm, S_uldm = periodogram(phases_uldm)
-f_three, S_three = periodogram(phases_multi)
+f_three, S_three = periodogram(phases)
 
 # ── plot style ─────────────────────────────────────────────────────────────────
 warm_background = False
@@ -163,6 +163,8 @@ ax_three.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
 ax_three.set_xlabel('$f$ [Hz]', fontsize=18)
 ax_three.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax_three.tick_params(labelsize=13)
+ax_three.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
+              transform=ax_three.transAxes, ha='right', va='top', fontsize=13)
 
 fig2.tight_layout()
 
