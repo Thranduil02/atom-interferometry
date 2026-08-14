@@ -26,9 +26,9 @@ N_cycles = int(T_total / T_cyc)
 
 # ── GGN oscillators ────────────────────────────────────────────────────────────
 oscillators = [
-    dict(name='A', enable=True, f=0.12, amp=1.0, M=1.0, D=3.0, h0= 1.0),
-    dict(name='B', enable=True, f=0.07, amp=1.0, M=1.0, D=2.0, h0= 3.0),
-    dict(name='C', enable=True, f=0.20, amp=1.0, M=1.0, D=3.0, h0=-3.0),
+    dict(name='A', enable=True, f=0.12, amp=0.1, M=0.01, D=3.0, h0= 1.0),
+    dict(name='B', enable=True, f=0.07, amp=0.1, M=0.01, D=2.0, h0= 3.0),
+    dict(name='C', enable=True, f=0.20, amp=0.1, M=0.01, D=3.0, h0=-3.0),
 ]
 active_oscillators = [o for o in oscillators if o['enable']]
 
