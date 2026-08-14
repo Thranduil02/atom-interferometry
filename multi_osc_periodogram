@@ -166,4 +166,27 @@ ax_three.tick_params(labelsize=13)
 
 fig2.tight_layout()
 
+# ── figure 3: same as figure 2, but with log-scaled y-axes ─────────────────────
+fig3, (ax_uldm_log, ax_single_log, ax_three_log) = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+
+ax_uldm_log.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax_uldm_log.set_yscale('log')
+ax_uldm_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_uldm_log.tick_params(labelsize=13)
+ax_uldm_log.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
+                  transform=ax_uldm_log.transAxes, ha='right', va='top', fontsize=13)
+
+ax_single_log.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
+ax_single_log.set_yscale('log')
+ax_single_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_single_log.tick_params(labelsize=13)
+
+ax_three_log.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax_three_log.set_yscale('log')
+ax_three_log.set_xlabel('$f$ [Hz]', fontsize=18)
+ax_three_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_three_log.tick_params(labelsize=13)
+
+fig3.tight_layout()
+
 plt.show()
