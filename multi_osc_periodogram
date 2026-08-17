@@ -26,9 +26,9 @@ N_cycles = int(T_total / T_cyc)
 
 # ── GGN oscillators ────────────────────────────────────────────────────────────
 oscillators = [
-    dict(name='A', enable=True, f=0.12, amp=0.1, M=0.01, D=3.0, h0= 1.0),
-    dict(name='B', enable=True, f=0.07, amp=0.1, M=0.01, D=2.0, h0= 3.0),
-    dict(name='C', enable=True, f=0.20, amp=0.1, M=0.01, D=3.0, h0=-3.0),
+    dict(name='A', enable=True, f=0.12, amp=0.5, M=0.005, D=3, h0= 1.0),
+    dict(name='B', enable=True, f=0.07, amp=0.5, M=0.005, D=4, h0= 3.0),
+    dict(name='C', enable=False, f=0.18, amp=0.5, M=0.05, D=5, h0=6.0),
 ]
 active_oscillators = [o for o in oscillators if o['enable']]
 
@@ -112,7 +112,8 @@ if enable_uldm:
 phases_uldm = uldm_phase_vec(t_meas)
 
 # ── single 0.12 Hz oscillator, ~10 g, 0.1 m amplitude, no ULDM ──────────────────
-single_oscillator = [dict(name='single', enable=True, f=0.12, amp=0.1, M=0.01, D=3.0, h0=1.0)]
+single_oscillator = [dict(name='single', enable=True, f=oscillators[0]['f'], amp=oscillators[0]['amp'],
+                           M=oscillators[0]['M'], D=oscillators[0]['D'], h0=oscillators[0]['h0'])]
 print(f"Computing {N_cycles:,} cycles (single 0.12 Hz oscillator)...")
 phases_single = compute_phases(single_oscillator)
 
@@ -123,7 +124,6 @@ def periodogram(ph):
     mask = f_k > 0
     return f_k[mask], S_k[mask]
 
-f_plot, S_plot = periodogram(phases)
 f_single, S_single = periodogram(phases_single)
 f_uldm, S_uldm = periodogram(phases_uldm)
 f_three, S_three = periodogram(phases)
@@ -133,17 +133,6 @@ warm_background = False
 if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
-
-# ── figure ─────────────────────────────────────────────────────────────────────
-fig, ax = plt.subplots(figsize=(11, 5))
-
-ax.plot(f_plot, np.sqrt(S_plot), color='firebrick', lw=1.8)
-
-ax.set_xlabel('$f$ [Hz]', fontsize=18)
-ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
-ax.tick_params(labelsize=13)
-
-fig.tight_layout()
 
 # ── figure 2: ULDM only (top) vs single 0.12 Hz oscillator (middle) vs three
 #    GGN oscillators at 0.12/0.07/0.20 Hz (bottom) ──────────────────────────────
@@ -171,22 +160,44 @@ fig3, (ax_uldm_log, ax_single_log, ax_three_log) = plt.subplots(3, 1, figsize=(1
 
 ax_uldm_log.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
 ax_uldm_log.set_yscale('log')
-ax_uldm_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_uldm_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax_uldm_log.tick_params(labelsize=13)
 ax_uldm_log.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
                   transform=ax_uldm_log.transAxes, ha='right', va='top', fontsize=13)
 
 ax_single_log.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
 ax_single_log.set_yscale('log')
-ax_single_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_single_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax_single_log.tick_params(labelsize=13)
 
 ax_three_log.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
 ax_three_log.set_yscale('log')
 ax_three_log.set_xlabel('$f$ [Hz]', fontsize=18)
-ax_three_log.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_three_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax_three_log.tick_params(labelsize=13)
 
 fig3.tight_layout()
+
+# ── figure 4: ULDM only (top) vs three-osc+ULDM (middle, linear) vs the same
+#    three-osc+ULDM on a log y-axis (bottom) ────────────────────────────────────
+fig4, (ax4_uldm, ax4_three, ax4_three_log) = plt.subplots(3, 1, figsize=(8, 20), sharex=True)
+
+ax4_uldm.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax4_uldm.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_uldm.tick_params(labelsize=13)
+ax4_uldm.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{m_e}} = {d_m_e:g}$',
+              transform=ax4_uldm.transAxes, ha='right', va='top', fontsize=13)
+
+ax4_three.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax4_three.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_three.tick_params(labelsize=13)
+
+ax4_three_log.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax4_three_log.set_yscale('log')
+ax4_three_log.set_xlabel('$f$ [Hz]', fontsize=18)
+ax4_three_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_three_log.tick_params(labelsize=13)
+
+fig4.tight_layout()
 
 plt.show()
