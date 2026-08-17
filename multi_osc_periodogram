@@ -199,5 +199,6 @@ ax4_three_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsi
 ax4_three_log.tick_params(labelsize=13)
 
 fig4.tight_layout()
+fig4.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms.jpg', dpi=200)
 
 plt.show()
