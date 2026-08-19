@@ -243,7 +243,7 @@ S_k     = (delta_t / N_meas) * np.abs(np.fft.rfft(pd_ac))**2
 f_k     = np.fft.rfftfreq(N_meas, d=delta_t)
 
 # ── Figures ───────────────────────────────────────────────────────────────────
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 10), tight_layout=True)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
 
 mask_100s = subsample_times <= 100
 ax1.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o-', color='blue')
@@ -254,6 +254,8 @@ ax2.plot(f_k[1:], np.sqrt(S_k[1:]) * 1e6, color='firebrick')
 ax2.set_xlabel('$f$ [Hz]', fontsize=16)
 ax2.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=16)
 ax2.set_xlim(0, 0.5 / delta_t)
+
+fig.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff.png', dpi=200)
 
 plt.show()
 print("\nDone.")
