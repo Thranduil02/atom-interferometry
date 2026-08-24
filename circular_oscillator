@@ -1,0 +1,222 @@
+#basic circular oscillator
+
+# source mass moves in a circle of radius R (instead of 1D up/down oscillation)
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# =====================
+# Constants
+# =====================
+M = 1
+g = 9.81
+dt = 0.01
+############
+u_initial = 3.86
+m_atom = 1.46e-25
+hbar = 1.055e-34
+wavelength = 698e-9
+wavenumber = (2 * np.pi) / wavelength
+T = 0.73
+n = 1000
+velocity_boost = n * hbar * wavenumber / m_atom
+G = 6.67e-11
+##############
+
+T_total = 10000
+timestep = np.arange(0, T_total, dt)
+
+h_0 = 1
+D_0 = 5
+
+R = 1
+f = 0.1
+theta = 2 * np.pi * f * timestep
+x = R * np.cos(theta)   # horizontal displacement of the source mass
+y = R * np.sin(theta)   # vertical displacement of the source mass
+
+
+def atom_path(z_0, u, t_start, t_end, delta_t, a, floor):
+    z_positions = []
+    timesteps = np.arange(t_start, t_end, delta_t)
+
+    z = z_0
+    v = u
+
+    for _ in timesteps:
+        z += v * delta_t + 0.5 * a * delta_t**2
+        v += a * delta_t
+
+        if z <= floor and v < 0:
+            z = floor
+            v = 0  # Atom remains on the ground
+            break
+
+        z_positions.append(z)
+
+    return timesteps[:len(z_positions)], np.array(z_positions), v
+
+def potential(M, D, z, h):
+    return -(G * M) / np.sqrt(D**2 + (z - h)**2)
+
+def potential_difference(z_1, z_2, D, h, M):
+    # upper - lower
+    return potential(M, D, z_2, h) - potential(M, D, z_1, h)
+
+def periodogram(N, delta_t, delta_phi):
+    S = np.zeros(N, dtype=np.float64)
+
+    for i in range(N):
+        sum_term = sum(delta_phi[l] * np.exp(-(2 * 1j * np.pi * l * i) / N) for l in range(N))
+        S[i] = (delta_t / N) * np.abs(sum_term) ** 2
+
+    return S
+
+# =====================
+# Lower and upper arm calculations
+# =====================
+def lower_arm(z_0, u, t_start, t_end, delta_t, a, floor, total_time=2.0):
+    lower1 = atom_path(z_0, u, t_start, t_end, delta_t, a, floor)
+    lower2 = atom_path(lower1[1][-1], lower1[2] + velocity_boost, t_end, 2 * t_end, delta_t, a, floor)
+
+    path = np.concatenate([lower1[1], lower2[1]])
+    t = np.concatenate([lower1[0], lower2[0]])
+
+    if len(t) == 0:
+        t = np.arange(t_start, total_time, delta_t)
+        path = np.ones_like(t) * floor
+        return t, path
+
+    if t[-1] < total_time:
+        remaining_time = np.arange(t[-1] + delta_t, total_time, delta_t)
+        path = np.concatenate([path, np.ones_like(remaining_time) * floor])
+        t = np.concatenate([t, remaining_time])
+
+    return t, path
+
+def upper_arm(z_0, u, t_start, t_end, delta_t, a, floor, total_time=2.0):
+    upper1 = atom_path(z_0, u + velocity_boost, t_start, t_end, delta_t, a, floor)
+    upper2 = atom_path(upper1[1][-1], upper1[2] - velocity_boost, t_end, 2 * t_end, delta_t, a, floor)
+
+    path = np.concatenate([upper1[1], upper2[1]])
+    t = np.concatenate([upper1[0], upper2[0]])
+
+    if len(t) == 0:
+        t = np.arange(t_start, total_time, delta_t)
+        path = np.ones_like(t) * floor
+        return t, path
+
+    if t[-1] < total_time:
+        remaining_time = np.arange(t[-1] + delta_t, total_time, delta_t)
+        path = np.concatenate([path, np.ones_like(remaining_time) * floor])
+        t = np.concatenate([t, remaining_time])
+
+    return t, path
+
+# =====================
+# Simulating multiple cycles for the interferometer arms
+# =====================
+cycle_time = 2.0
+N_cycles = int(T_total / cycle_time)
+
+timestep = np.arange(0, N_cycles * cycle_time, dt)
+
+t1, lower1_cycle = lower_arm(0, u_initial, 0, T, dt, -g, 0, total_time=cycle_time)
+t2, lower2_cycle = lower_arm(5, u_initial, 0, T, dt, -g, 5, total_time=cycle_time)
+t3, upper1_cycle = upper_arm(0, u_initial, 0, T, dt, -g, 0, total_time=cycle_time)
+t4, upper2_cycle = upper_arm(5, u_initial, 0, T, dt, -g, 5, total_time=cycle_time)
+
+lower1 = np.concatenate([lower1_cycle for _ in range(N_cycles)])
+lower2 = np.concatenate([lower2_cycle for _ in range(N_cycles)])
+upper1 = np.concatenate([upper1_cycle for _ in range(N_cycles)])
+upper2 = np.concatenate([upper2_cycle for _ in range(N_cycles)])
+
+
+N_tot = min(len(timestep), len(lower1), len(lower2), len(upper1), len(upper2), len(x), len(y))
+timestep = timestep[:N_tot]
+lower1 = lower1[:N_tot]
+lower2 = lower2[:N_tot]
+upper1 = upper1[:N_tot]
+upper2 = upper2[:N_tot]
+x = x[:N_tot]
+y = y[:N_tot]
+
+# =====================
+# Instantaneous potential differences (time series)
+# =====================
+# source mass traces a circle of radius R centered on (D_0, h_0):
+# horizontal offset D_t and height h_t both vary with the same angular frequency
+D_t = D_0 + x
+h_t = h_0 + y
+
+potdiff_1 = np.array([potential_difference(lower1[i], upper1[i], D_t[i], h_t[i], M) for i in range(N_tot)])
+potdiff_2 = np.array([potential_difference(lower2[i], upper2[i], D_t[i], h_t[i], M) for i in range(N_tot)])
+
+# =====================
+# Time-accumulated phase over a 2T window (sliding trapezoid)
+# =====================
+L = int(round((2 * T) / dt))  # samples in 2T
+
+cum1 = np.concatenate(([0.0], np.cumsum(0.5 * (potdiff_1[1:] + potdiff_1[:-1]) * dt)))
+cum2 = np.concatenate(([0.0], np.cumsum(0.5 * (potdiff_2[1:] + potdiff_2[:-1]) * dt)))
+
+I1 = cum1[L:] - cum1[:-L]
+I2 = cum2[L:] - cum2[:-L]
+
+delta_phi_1 = (m_atom / hbar) * I1
+delta_phi_2 = (m_atom / hbar) * I2
+phase_difference = delta_phi_1 - delta_phi_2
+
+# Tag phase samples at the END of the 2T window
+# I[i] integrates [i*dt, (i+L)*dt], so window closes at t = i*dt + L*dt
+t_phase = timestep[:len(phase_difference)] + L * dt
+
+# =====================
+# Subsample at t = 1.46, 3.46, 5.46, ...
+# =====================
+subsample_times = np.arange(1.46, t_phase.max(), 2)
+sub_idx = np.searchsorted(t_phase, subsample_times)
+sub_idx = sub_idx[sub_idx < len(t_phase)]
+
+subsample_phase_diff = phase_difference[sub_idx]
+subsample_times = t_phase[sub_idx]
+
+N_k=int(T_total/2)
+k = np.arange(0, N_k, step=1)
+delta_t=subsample_times[1]-subsample_times[0]
+
+S_phasediff=periodogram(N_k, delta_t, subsample_phase_diff)
+
+f_k = k / (N_k * delta_t)
+
+nyquist_freq = 1 / (2 * delta_t)
+mask = k / (N_k * delta_t) <= nyquist_freq
+f_k_filtered = k[mask] / (N_k * delta_t)
+S_phasediff_filtered = S_phasediff[mask]
+
+# ── plot style ────────────────────────────────────────────────────────────────
+warm_background = False   # set True to use off-white background (#fdfcf3) on all plots
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
+# ── Figure 1: phase difference vs time ────────────────────────────────────────
+fig1, ax_phi = plt.subplots(figsize=(12, 5))
+
+ax_phi.plot(subsample_times, subsample_phase_diff * 1e6, 'o', color='firebrick', markersize=6)
+ax_phi.set_xlabel('$t$ [s]', fontsize=16)
+ax_phi.set_ylabel(r'$\Delta\Phi$ [$\mu$rad]', fontsize=16)
+ax_phi.tick_params(labelsize=13)
+
+fig1.tight_layout()
+
+# ── Figure 2: periodogram ─────────────────────────────────────────────────────
+fig2, ax_pg = plt.subplots(figsize=(10, 5))
+
+ax_pg.plot(f_k_filtered, np.sqrt(S_phasediff_filtered), color='firebrick', lw=1.5)
+ax_pg.set_xlabel('$f$ [Hz]', fontsize=16)
+ax_pg.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=16)
+ax_pg.tick_params(labelsize=13)
+
+fig2.tight_layout()
+plt.show()
