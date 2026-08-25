@@ -1,0 +1,210 @@
+"""
+Multi-oscillator GGN + ULDM: classical periodogram.
+
+100 m-class baseline variant of multi_osc_periodogram: same oscillator logic,
+phase-difference calculation, and sequence, but with a longer baseline (L),
+longer half-interferometry time (T), longer cycle time (T_cyc), and a higher
+launch speed.
+
+Three independently togglable GGN oscillators plus an ULDM signal at f_uldm Hz.
+Output: classical DFT periodogram.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom  = 1.46e-25;  hbar = 1.055e-34
+G       = 6.67e-11;  g    = 9.81
+n       = 1000
+v_kick  = n * hbar * (2 * np.pi / 698e-9) / m_atom
+u0      = 24.5        # launch speed [m/s]
+T       = 2.5         # half-interferometry time [s]
+T_fly   = 2 * T
+T_cyc   = 5.0          # cycle time [s]
+dt      = 0.01
+
+N_fly   = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+T_total  = 1e6        # total simulation time [s]
+N_cycles = int(T_total / T_cyc)
+
+# ── GGN oscillators ────────────────────────────────────────────────────────────
+oscillators = [
+    dict(name='A', enable=True, f=0.12, amp=0.5, M=0.005, D=3, h0= 1.0),
+    dict(name='B', enable=True, f=0.16, amp=0.5, M=0.005, D=4, h0= 3.0),
+    dict(name='C', enable=False, f=0.18, amp=0.5, M=0.05, D=5, h0=6.0),
+]
+active_oscillators = [o for o in oscillators if o['enable']]
+
+# ── ULDM parameters ────────────────────────────────────────────────────────────
+enable_uldm = True
+f_uldm      = 0.1
+G_nat       = 6.708e-39
+d_e         = 1e-3;  d_m_e      = 1e-3
+m_phi       = 4e-16;  rho_phi = 0.3
+theta       = np.pi / 2;  xi  = 0.06
+omega_A     = 2.67e15
+L_base      = 140;  delta_r    = 5
+n_lmt       = n;  conv_factor = 2.77e-12
+
+def uldm_phase_vec(t):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * 3e8))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / 3e8) / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / 3e8) / 2 + t) + theta))
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h, M, D):
+    return -G * M / np.sqrt(D**2 + (z - h)**2)
+
+# ── pre-compute arm positions (reused for every cycle) ─────────────────────────
+lower1 = arm_positions(0, 0, upper=False)
+upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(5, 5, upper=False)
+upper2 = arm_positions(5, 5, upper=True)
+
+# ── compute phases ─────────────────────────────────────────────────────────────
+t_starts = np.arange(N_cycles) * T_cyc
+t_meas   = t_starts + T_fly
+
+def compute_phases(active_oscs, chunk=50_000):
+    """Vectorized, chunked over cycles to bound memory at large N_cycles."""
+    phases = np.empty(N_cycles)
+    for start in range(0, N_cycles, chunk):
+        end   = min(start + chunk, N_cycles)
+        t_abs = t_starts[start:end][:, None] + t_local[None, :]   # (chunk, N_fly)
+        dphi  = np.zeros_like(t_abs)
+        for osc in active_oscs:
+            h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
+            dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
+                   - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
+        phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
+        print(f"  cycles {end:,}/{N_cycles:,} done", flush=True)
+    return phases
+
+print(f"Computing {N_cycles:,} cycles...")
+phases_multi = compute_phases(active_oscillators)
+phases = phases_multi.copy()
+if enable_uldm:
+    phases += uldm_phase_vec(t_meas)
+
+# ── ULDM-only signal (no GGN oscillators) ───────────────────────────────────────
+phases_uldm = uldm_phase_vec(t_meas)
+
+# ── single 0.12 Hz oscillator, ~10 g, 0.1 m amplitude, no ULDM ──────────────────
+single_oscillator = [dict(name='single', enable=True, f=oscillators[0]['f'], amp=oscillators[0]['amp'],
+                           M=oscillators[0]['M'], D=oscillators[0]['D'], h0=oscillators[0]['h0'])]
+print(f"Computing {N_cycles:,} cycles (single 0.12 Hz oscillator)...")
+phases_single = compute_phases(single_oscillator)
+
+# ── classical periodogram (FFT) ────────────────────────────────────────────────
+def periodogram(ph):
+    f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
+    S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(ph - ph.mean()))**2
+    mask = f_k > 0
+    return f_k[mask], S_k[mask]
+
+f_single, S_single = periodogram(phases_single)
+f_uldm, S_uldm = periodogram(phases_uldm)
+f_three, S_three = periodogram(phases)
+
+# ── plot style ─────────────────────────────────────────────────────────────────
+warm_background = False
+if warm_background:
+    plt.rcParams['figure.facecolor'] = '#fdfcf3'
+    plt.rcParams['axes.facecolor']   = '#fdfcf3'
+
+# ── figure 2: ULDM only (top) vs single 0.12 Hz oscillator (middle) vs three
+#    GGN oscillators at 0.12/0.07/0.20 Hz (bottom) ──────────────────────────────
+fig2, (ax_uldm, ax_single, ax_three) = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+
+ax_uldm.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax_uldm.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_uldm.tick_params(labelsize=13)
+ax_uldm.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
+             transform=ax_uldm.transAxes, ha='right', va='top', fontsize=13)
+
+ax_single.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
+ax_single.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_single.tick_params(labelsize=13)
+
+ax_three.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax_three.set_xlabel('$f$ [Hz]', fontsize=18)
+ax_three.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_three.tick_params(labelsize=13)
+
+fig2.tight_layout()
+
+# ── figure 3: same as figure 2, but with log-scaled y-axes ─────────────────────
+fig3, (ax_uldm_log, ax_single_log, ax_three_log) = plt.subplots(3, 1, figsize=(11, 12), sharex=True)
+
+ax_uldm_log.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax_uldm_log.set_yscale('log')
+ax_uldm_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_uldm_log.tick_params(labelsize=13)
+ax_uldm_log.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{\dot m_e}} = {d_m_e:g}$',
+                  transform=ax_uldm_log.transAxes, ha='right', va='top', fontsize=13)
+
+ax_single_log.plot(f_single, np.sqrt(S_single), color='firebrick', lw=1.8)
+ax_single_log.set_yscale('log')
+ax_single_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_single_log.tick_params(labelsize=13)
+
+ax_three_log.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax_three_log.set_yscale('log')
+ax_three_log.set_xlabel('$f$ [Hz]', fontsize=18)
+ax_three_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_three_log.tick_params(labelsize=13)
+
+fig3.tight_layout()
+
+# ── figure 4: ULDM only (top) vs three-osc+ULDM (middle, linear) vs the same
+#    three-osc+ULDM on a log y-axis (bottom) ────────────────────────────────────
+fig4, (ax4_uldm, ax4_three, ax4_three_log) = plt.subplots(3, 1, figsize=(8, 12), sharex=True)
+
+ax4_uldm.plot(f_uldm, np.sqrt(S_uldm), color='firebrick', lw=1.8)
+ax4_uldm.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_uldm.tick_params(labelsize=13)
+ax4_uldm.text(0.98, 0.92, rf'$d_e = {d_e:g}$, $d_{{m_e}} = {d_m_e:g}$',
+              transform=ax4_uldm.transAxes, ha='right', va='top', fontsize=13)
+
+ax4_three.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax4_three.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_three.tick_params(labelsize=13)
+
+ax4_three_log.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
+ax4_three_log.set_yscale('log')
+ax4_three_log.set_xlabel('$f$ [Hz]', fontsize=18)
+ax4_three_log.set_ylabel(r'$\log \sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax4_three_log.tick_params(labelsize=13)
+
+fig4.tight_layout()
+fig4.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms_100m.jpg', dpi=200)
+
+plt.show()
