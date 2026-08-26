@@ -1,10 +1,10 @@
 """
 Multi-oscillator GGN + ULDM: classical periodogram.
 
-100 m-class baseline variant of multi_osc_periodogram: same oscillator logic,
-phase-difference calculation, and sequence, but with a longer baseline (L),
-longer half-interferometry time (T), longer cycle time (T_cyc), and a higher
-launch speed.
+100 m-class baseline variant of multi_osc_periodogram, with the GGN oscillator(s)
+tracing a circle of radius R (in the D-h plane) instead of oscillating along h
+only — see circular_oscillator. Same phase-difference calculation and sequence
+otherwise.
 
 Three independently togglable GGN oscillators plus an ULDM signal at f_uldm Hz.
 Output: classical DFT periodogram.
@@ -27,12 +27,12 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 2.5e6        # total simulation time [s]
+T_total  = 3e7        # total simulation time [s]
 N_cycles = int(T_total / T_cyc)
 
-# ── GGN oscillators ────────────────────────────────────────────────────────────
+# ── GGN oscillators (circular: 'amp' is the circle radius R) ────────────────────
 oscillators = [
-    dict(name='A', enable=True, f=0.08, amp=0.5, M=0.05, D=1, h0= 1.0),
+    dict(name='A', enable=True, f=0.08, amp=0.5, M=0.05, D=3, h0= 1.0),
     dict(name='B', enable=False, f=0.16, amp=0.5, M=0.005, D=4, h0= 3.0),
     dict(name='C', enable=False, f=0.18, amp=0.5, M=0.05, D=5, h0=6.0),
 ]
@@ -101,9 +101,11 @@ def compute_phases(active_oscs, chunk=50_000):
         t_abs = t_starts[start:end][:, None] + t_local[None, :]   # (chunk, N_fly)
         dphi  = np.zeros_like(t_abs)
         for osc in active_oscs:
-            h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
-            dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
-                   - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
+            phase_osc = 2 * np.pi * osc['f'] * t_abs
+            h_osc = osc['h0'] + osc['amp'] * np.sin(phase_osc)
+            D_osc = osc['D'] + osc['amp'] * np.cos(phase_osc)
+            dphi += ((V(upper1, h_osc, osc['M'], D_osc) - V(lower1, h_osc, osc['M'], D_osc))
+                   - (V(upper2, h_osc, osc['M'], D_osc) - V(lower2, h_osc, osc['M'], D_osc)))
         phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
         print(f"  cycles {end:,}/{N_cycles:,} done", flush=True)
     return phases
@@ -144,6 +146,6 @@ ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
 ax.tick_params(labelsize=13)
 
 fig.tight_layout()
-fig.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms_100m.jpg', dpi=200)
+fig.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms_100m_circular.jpg', dpi=200)
 
 plt.show()

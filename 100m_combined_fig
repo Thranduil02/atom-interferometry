@@ -1,13 +1,14 @@
 """
-Multi-oscillator GGN + ULDM: classical periodogram.
+100 m-class baseline: linear vs circular GGN oscillator, side by side.
 
-100 m-class baseline variant of multi_osc_periodogram: same oscillator logic,
-phase-difference calculation, and sequence, but with a longer baseline (L),
-longer half-interferometry time (T), longer cycle time (T_cyc), and a higher
-launch speed.
+Two vertically stacked periodogram panels, both ULDM + shot noise on top of a
+single GGN oscillator (A):
+  top    - oscillator A oscillating linearly in h only (100m_oscillators)
+  bottom - oscillator A tracing a circle of radius amp in the D-h plane
+           (100m_circular)
 
-Three independently togglable GGN oscillators plus an ULDM signal at f_uldm Hz.
-Output: classical DFT periodogram.
+Same trajectories, phase-difference calculation, and sequence as those two
+scripts; only the oscillator's motion model differs between panels.
 """
 
 import numpy as np
@@ -27,16 +28,11 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 2.5e6        # total simulation time [s]
+T_total  = 3e7        # total simulation time [s]
 N_cycles = int(T_total / T_cyc)
 
-# ── GGN oscillators ────────────────────────────────────────────────────────────
-oscillators = [
-    dict(name='A', enable=True, f=0.08, amp=0.5, M=0.05, D=1, h0= 1.0),
-    dict(name='B', enable=False, f=0.16, amp=0.5, M=0.005, D=4, h0= 3.0),
-    dict(name='C', enable=False, f=0.18, amp=0.5, M=0.05, D=5, h0=6.0),
-]
-active_oscillators = [o for o in oscillators if o['enable']]
+# ── GGN oscillator A (amp is the linear amplitude or the circle radius) ────────
+oscillator_A = dict(name='A', f=0.08, amp=0.5, M=0.05, D=3, h0=1.0)
 
 # ── ULDM parameters ────────────────────────────────────────────────────────────
 enable_uldm = True
@@ -93,32 +89,37 @@ upper2 = arm_positions(delta_r, delta_r, upper=True)
 t_starts = np.arange(N_cycles) * T_cyc
 t_meas   = t_starts + T_fly
 
-def compute_phases(active_oscs, chunk=50_000):
+def compute_phases(osc, circular, chunk=50_000):
     """Vectorized, chunked over cycles to bound memory at large N_cycles."""
     phases = np.empty(N_cycles)
     for start in range(0, N_cycles, chunk):
         end   = min(start + chunk, N_cycles)
         t_abs = t_starts[start:end][:, None] + t_local[None, :]   # (chunk, N_fly)
-        dphi  = np.zeros_like(t_abs)
-        for osc in active_oscs:
-            h_osc = osc['h0'] + osc['amp'] * np.cos(2 * np.pi * osc['f'] * t_abs)
-            dphi += ((V(upper1, h_osc, osc['M'], osc['D']) - V(lower1, h_osc, osc['M'], osc['D']))
-                   - (V(upper2, h_osc, osc['M'], osc['D']) - V(lower2, h_osc, osc['M'], osc['D'])))
+        osc_phase = 2 * np.pi * osc['f'] * t_abs
+        if circular:
+            h_osc = osc['h0'] + osc['amp'] * np.sin(osc_phase)
+            D_osc = osc['D'] + osc['amp'] * np.cos(osc_phase)
+        else:
+            h_osc = osc['h0'] + osc['amp'] * np.cos(osc_phase)
+            D_osc = osc['D']
+        dphi = ((V(upper1, h_osc, osc['M'], D_osc) - V(lower1, h_osc, osc['M'], D_osc))
+              - (V(upper2, h_osc, osc['M'], D_osc) - V(lower2, h_osc, osc['M'], D_osc)))
         phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
         print(f"  cycles {end:,}/{N_cycles:,} done", flush=True)
     return phases
 
-print(f"Computing {N_cycles:,} cycles...")
-phases_multi = compute_phases(active_oscillators)
-phases = phases_multi.copy()
-if enable_uldm:
-    phases += uldm_phase_vec(t_meas)
+def add_uldm_and_noise(phases):
+    if enable_uldm:
+        phases = phases + uldm_phase_vec(t_meas)
+    shot_noise_asd = 1e-4
+    phases = phases + np.random.normal(0.0, shot_noise_asd / np.sqrt(T_cyc), size=N_cycles)
+    return phases
 
-# ── shot noise ─────────────────────────────────────────────────────────────────
-# white noise with one-sided ASD = shot_noise_asd [rad/sqrt(Hz)]; since phases are
-# sampled once per cycle (spacing T_cyc), the per-sample std is asd/sqrt(T_cyc)
-shot_noise_asd = 1e-4
-phases += np.random.normal(0.0, shot_noise_asd / np.sqrt(T_cyc), size=N_cycles)
+print(f"Computing {N_cycles:,} cycles (linear oscillator)...")
+phases_linear = add_uldm_and_noise(compute_phases(oscillator_A, circular=False))
+
+print(f"Computing {N_cycles:,} cycles (circular oscillator)...")
+phases_circular = add_uldm_and_noise(compute_phases(oscillator_A, circular=True))
 
 # ── classical periodogram (FFT) ────────────────────────────────────────────────
 def periodogram(ph):
@@ -127,7 +128,8 @@ def periodogram(ph):
     mask = f_k > 0
     return f_k[mask], S_k[mask]
 
-f_three, S_three = periodogram(phases)
+f_linear, S_linear = periodogram(phases_linear)
+f_circular, S_circular = periodogram(phases_circular)
 
 # ── plot style ─────────────────────────────────────────────────────────────────
 warm_background = False
@@ -135,15 +137,19 @@ if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
-# ── figure: GGN oscillator(s) + ULDM combined ───────────────────────────────────
-fig, ax = plt.subplots(figsize=(11, 5))
+# ── figure: linear oscillator + ULDM (top) vs circular oscillator + ULDM (bottom)
+fig, (ax_lin, ax_circ) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
 
-ax.plot(f_three, np.sqrt(S_three), color='firebrick', lw=1.8)
-ax.set_xlabel('$f$ [Hz]', fontsize=18)
-ax.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
-ax.tick_params(labelsize=13)
+ax_lin.plot(f_linear, np.sqrt(S_linear), color='firebrick', lw=1.8)
+ax_lin.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_lin.tick_params(labelsize=13)
+
+ax_circ.plot(f_circular, np.sqrt(S_circular), color='firebrick', lw=1.8)
+ax_circ.set_xlabel('$f$ [Hz]', fontsize=18)
+ax_circ.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)
+ax_circ.tick_params(labelsize=13)
 
 fig.tight_layout()
-fig.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms_100m.jpg', dpi=200)
+fig.savefig(r'C:\Users\Georg\Desktop\oscillators_periodograms_100m_combined.jpg', dpi=200)
 
 plt.show()
