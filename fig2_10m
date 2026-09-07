@@ -1,39 +1,46 @@
 """
-Figure 2 (anchor figure): ULDM peak, oscillator harmonic comb, Nyquist folding,
+Figure 2 (10 m variant): ULDM peak, oscillator harmonic comb, Nyquist folding,
 and the folded-harmonic/ULDM degeneracy that motivates the paper.
 
-Device parameters follow the AICE 100 m setup used elsewhere in this repo
-(100m_oscillators / 100m_combined_fig): T_cyc = 5 s -> f_N = 0.1 Hz,
-T_obs = 3e7 s. The trajectory/potential pipeline (atom_path, arm_positions, V,
-compute_phases, periodogram) is unchanged from those scripts.
+Same figure as fig2_uldm_folding, but using the 10 m-instrument parameters
+from 1D_oscillator / lift_uldm_osc_pipeline instead of the 100 m AICE setup:
+u0 = 3.86 m/s, T = 0.73 s (T_fly = 1.46 s), T_cyc = 2 s -> f_N = 0.25 Hz,
+L_base = 10 m, delta_r = 5 m (= L_base/2, matching the 100 m convention).
+T_obs = 3.15e7 s (~1 year), same as fig2_uldm_folding.
+
+All four target frequencies (f_phi and the three oscillators' f0) are the
+fig2_uldm_folding values scaled by f_N_new/f_N_old = 0.25/0.1 = 2.5. Because
+fold_frequency(k*f, k*fN) = k*fold_frequency(f, fN) (the reflection map is
+linear/homogeneous), this scaling preserves every qualitative relationship
+from the 100 m figure exactly: the oversampling factor f_N/f_phi, panel (c)'s
+detuning off its degeneracy, and panel (d)'s n=2 harmonic folding exactly
+onto f_phi. The trajectory/potential pipeline (atom_path, arm_positions, V,
+compute_phases, periodogram) is otherwise unchanged.
 
 Four stacked panels, log y-axis, identical y-limits, coloured by physical
 origin (see COLORS below):
-  (a) ULDM only, f_phi = 0.085 Hz (moved off f_N so the sine quadrature in
+  (a) ULDM only, f_phi = 0.2125 Hz (moved off f_N so the sine quadrature in
       uldm_phase_vec doesn't vanish identically) -- single clean peak over a
       flat shot-noise floor.
-  (b) Sub-Nyquist comb: oscillator at f0 = 0.02 Hz, fundamental + harmonics
+  (b) Sub-Nyquist comb: oscillator at f0 = 0.05 Hz, fundamental + harmonics
       up to 4*f0, all below f_N -- the plain simulated periodogram, no
       fit or analytic overlay.
-  (c) Super-Nyquist folding: oscillator at f0 = 0.131 Hz (detuned off the
-      6/5 * f_N degeneracy of 0.12 Hz) plus ULDM -- harmonics n=1..5 all fold
+  (c) Super-Nyquist folding: oscillator at f0 = 0.3275 Hz (detuned off the
+      6/5 * f_N degeneracy of 0.3 Hz) plus ULDM -- harmonics n=1..5 all fold
       to distinct frequencies, none coinciding with f_phi.
   (d) Degeneracy: 2D circular oscillator (source mass traces a circle of
       radius amp in the D-h plane, as in circular_oscillator/100m_circular)
-      at f0 = 0.1425 Hz plus ULDM, chosen so its n=2 harmonic folds to
-      exactly f_phi = 0.085 Hz.
+      at f0 = 0.35625 Hz plus ULDM, chosen so its n=2 harmonic folds to
+      exactly f_phi = 0.2125 Hz.
 
 (No inset/strip sub-plots for now -- plain annotated periodogram panels only,
-pending further layout refinement.)
+matching fig2_uldm_folding's current layout.)
 
 Coupling constants for the ULDM signal (d_e, d_m_e, xi, omega_A, G_nat,
-rho_phi, conv_factor) are left exactly as in multi_osc_periodogram /
-100m_oscillators, per instruction -- at T_obs = 3e7 s this gives a ULDM peak
-of ~2.3e4 microrad/sqrt(Hz), about 230x the 100 microrad/sqrt(Hz) shot-noise
-floor also used elsewhere in this repo. That combination (large, unambiguous
-peak vs. floor) is what panel (a) is showing.
-
-T_total = 3.15e7 s (~1 year) for the full-statistics run.
+rho_phi, conv_factor) and the GGN oscillator geometry (amp, M, D, h0) are
+left exactly as in fig2_uldm_folding -- only the interferometer/baseline
+parameters (u0, T, T_cyc, L_base, delta_r) and the four target frequencies
+change between the two scripts.
 """
 
 import numpy as np
@@ -44,20 +51,20 @@ m_atom  = 1.46e-25;  hbar = 1.055e-34
 G       = 6.67e-11;  g    = 9.81
 n       = 1000
 v_kick  = n * hbar * (2 * np.pi / 698e-9) / m_atom
-u0      = 24.5        # launch speed [m/s]
-T       = 2.5         # half-interferometry time [s]
+u0      = 3.86         # launch speed [m/s] -- 10 m instrument (1D_oscillator)
+T       = 0.73         # half-interferometry time [s]
 T_fly   = 2 * T
-T_cyc   = 5.0          # cycle time [s]
+T_cyc   = 2.0           # cycle time [s]
 dt      = 0.01
 
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 3e7     # total observation time [s] (~1 year)
+T_total  = 1e6   # total observation time [s] (~1 year), same as fig2_uldm_folding
 N_cycles = int(T_total / T_cyc)
-f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
+f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.25 Hz
 
-delta_r = 70.0   # gradiometer baseline (matches 100m_oscillators)
+delta_r = 5.0    # gradiometer baseline -- 10 m instrument (L_base/2)
 
 shot_noise_asd = 1e-4   # rad/sqrt(Hz), same level as elsewhere in this repo
 
@@ -73,17 +80,16 @@ COLORS = dict(
 )
 
 # ── ULDM parameters ────────────────────────────────────────────────────────────
-f_phi       = 0.085   # moved off f_N = 0.1 Hz
+f_phi       = 0.2125   # moved off f_N = 0.25 Hz (0.085/0.1 * 0.25, same ratio as
+                        # fig2_uldm_folding)
 hbar_eV     = 6.582119569e-16                 # hbar in eV*s
-m_phi       = 2 * np.pi * f_phi * hbar_eV     # Compton relation, consistent with
-                                               # the m_phi=4e-16 <-> f_uldm=0.1 pairing
-                                               # used elsewhere in this repo
+m_phi       = 2 * np.pi * f_phi * hbar_eV     # Compton relation
 G_nat       = 6.708e-39
 d_e         = 1e-3;  d_m_e      = 1e-3
 rho_phi     = 0.3
 theta       = np.pi / 2;  xi  = 0.06
 omega_A     = 2.67e15
-L_base      = 140.0
+L_base      = 10.0    # m -- 10 m instrument baseline
 n_lmt       = n;  conv_factor = 2.77e-12
 c_light     = 3e8
 
@@ -117,7 +123,7 @@ def fold_frequency(f, fN):
     r = f % fs
     return fs - r if r > fN else r
 
-# ── trajectory helpers (unchanged from 100m_oscillators) ────────────────────────
+# ── trajectory helpers (unchanged from fig2_uldm_folding) ───────────────────────
 def atom_path(z0, u, t0, t1, floor):
     z, v, zs = z0, u, []
     for _ in np.arange(t0, t1, dt):
@@ -152,10 +158,7 @@ def compute_phases(osc, circular=False, chunk=50_000, t_starts=t_starts, N_cycle
     """Vectorized, chunked over cycles.
     circular=False: linear (up/down) GGN oscillator, h0 + amp*cos, D fixed.
     circular=True:  source mass traces a circle of radius amp in the D-h
-                    plane (matches circular_oscillator / 100m_circular).
-    t_starts/N_cycles default to the module-level (T_cyc-spaced) values but
-    can be overridden to resample the same physical source at a different
-    cycle time (e.g. fig_unfolding.py's finely-sampled comparison run)."""
+                    plane (matches circular_oscillator / 100m_circular)."""
     phases = np.empty(N_cycles)
     for start in range(0, N_cycles, chunk):
         end   = min(start + chunk, N_cycles)
@@ -188,10 +191,10 @@ def peak_at(f_k, S_k_urad, f_target):
 
 # ── oscillator definitions (same geometry, only f0 differs per panel) ──────────
 osc_common = dict(amp=0.5, M=1.0, D=3.0, h0=1.0)
-osc_b = dict(name='b', f=0.02,   **osc_common)   # sub-Nyquist comb
-osc_c = dict(name='c', f=0.131,  **osc_common)   # super-Nyquist, no coincidence
-osc_d = dict(name='d', f=0.1425, **osc_common)   # super-Nyquist, n=2 -> f_phi
-                                                  # (2D circular oscillator, see below)
+osc_b = dict(name='b', f=0.05,     **osc_common)   # sub-Nyquist comb
+osc_c = dict(name='c', f=0.3275,   **osc_common)   # super-Nyquist, no coincidence
+osc_d = dict(name='d', f=0.35625,  **osc_common)   # super-Nyquist, n=2 -> f_phi
+                                                    # (2D circular oscillator, see below)
 
 if __name__ == "__main__":
     # ── run the pipeline ─────────────────────────────────────────────────────
@@ -343,7 +346,7 @@ if __name__ == "__main__":
 
     ax_d.set_xlabel('$f$ [Hz]', fontsize=8)
 
-    fig.savefig(r'C:\Users\Georg\Desktop\fig2_uldm_folding.jpg', dpi=200, bbox_inches='tight')
+    fig.savefig(r'C:\Users\Georg\Desktop\fig2_10m.jpg', dpi=200, bbox_inches='tight')
 
     # ── suggested caption, printed so it's reproducible from the run ─────────
     print("\n" + "=" * 78)
