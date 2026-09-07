@@ -2,9 +2,9 @@
 100 m-class baseline: linear vs circular GGN oscillator, side by side.
 
 Two vertically stacked periodogram panels, both ULDM + shot noise on top of a
-single GGN oscillator (A):
-  top    - oscillator A oscillating linearly in h only (100m_oscillators)
-  bottom - oscillator A tracing a circle of radius amp in the D-h plane
+GGN oscillator, each panel with its own independently configurable f/amp/M/D/h0:
+  top    - oscillator_linear oscillating linearly in h only (100m_oscillators)
+  bottom - oscillator_circular tracing a circle of radius amp in the D-h plane
            (100m_circular)
 
 Same trajectories, phase-difference calculation, and sequence as those two
@@ -28,11 +28,12 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 3e7        # total simulation time [s]
+T_total  = 1e6        # total simulation time [s]
 N_cycles = int(T_total / T_cyc)
 
-# ── GGN oscillator A (amp is the linear amplitude or the circle radius) ────────
-oscillator_A = dict(name='A', f=0.08, amp=0.5, M=0.05, D=3, h0=1.0)
+# ── GGN oscillators, controlled independently per panel ────────────────────────
+oscillator_linear   = dict(name='A_linear',   f=0.03, amp=0.5, M=0.05, D=1, h0=1.0)
+oscillator_circular = dict(name='A_circular', f=100.21, amp=0.5, M=0.1, D=1, h0=1.0)
 
 # ── ULDM parameters ────────────────────────────────────────────────────────────
 enable_uldm = True
@@ -116,10 +117,10 @@ def add_uldm_and_noise(phases):
     return phases
 
 print(f"Computing {N_cycles:,} cycles (linear oscillator)...")
-phases_linear = add_uldm_and_noise(compute_phases(oscillator_A, circular=False))
+phases_linear = add_uldm_and_noise(compute_phases(oscillator_linear, circular=False))
 
 print(f"Computing {N_cycles:,} cycles (circular oscillator)...")
-phases_circular = add_uldm_and_noise(compute_phases(oscillator_A, circular=True))
+phases_circular = add_uldm_and_noise(compute_phases(oscillator_circular, circular=True))
 
 # ── classical periodogram (FFT) ────────────────────────────────────────────────
 def periodogram(ph):
@@ -138,7 +139,7 @@ if warm_background:
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
 # ── figure: linear oscillator + ULDM (top) vs circular oscillator + ULDM (bottom)
-fig, (ax_lin, ax_circ) = plt.subplots(2, 1, figsize=(11, 9), sharex=True)
+fig, (ax_lin, ax_circ) = plt.subplots(2, 1, figsize=(6, 14), sharex=True)
 
 ax_lin.plot(f_linear, np.sqrt(S_linear), color='firebrick', lw=1.8)
 ax_lin.set_ylabel(r'$\sqrt{S_k}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=18)

@@ -1,0 +1,357 @@
+"""
+Figure 2 (anchor figure): ULDM peak, oscillator harmonic comb, Nyquist folding,
+and the folded-harmonic/ULDM degeneracy that motivates the paper.
+
+Device parameters follow the AICE 100 m setup used elsewhere in this repo
+(100m_oscillators / 100m_combined_fig): T_cyc = 5 s -> f_N = 0.1 Hz,
+T_obs = 3e7 s. The trajectory/potential pipeline (atom_path, arm_positions, V,
+compute_phases, periodogram) is unchanged from those scripts.
+
+Four stacked panels, log y-axis, identical y-limits, coloured by physical
+origin (see COLORS below):
+  (a) ULDM only, f_phi = 0.085 Hz (moved off f_N so the sine quadrature in
+      uldm_phase_vec doesn't vanish identically) -- single clean peak over a
+      flat shot-noise floor.
+  (b) Sub-Nyquist comb: oscillator at f0 = 0.02 Hz, fundamental + harmonics
+      up to 4*f0, all below f_N -- the plain simulated periodogram, no
+      fit or analytic overlay.
+  (c) Super-Nyquist folding: oscillator at f0 = 0.131 Hz (detuned off the
+      6/5 * f_N degeneracy of 0.12 Hz) plus ULDM -- harmonics n=1..5 all fold
+      to distinct frequencies, none coinciding with f_phi.
+  (d) Degeneracy: 2D circular oscillator (source mass traces a circle of
+      radius amp in the D-h plane, as in circular_oscillator/100m_circular)
+      at f0 = 0.1425 Hz plus ULDM, chosen so its n=2 harmonic folds to
+      exactly f_phi = 0.085 Hz.
+
+(No inset/strip sub-plots for now -- plain annotated periodogram panels only,
+pending further layout refinement.)
+
+Coupling constants for the ULDM signal (d_e, d_m_e, xi, omega_A, G_nat,
+rho_phi, conv_factor) are left exactly as in multi_osc_periodogram /
+100m_oscillators, per instruction -- at T_obs = 3e7 s this gives a ULDM peak
+of ~2.3e4 microrad/sqrt(Hz), about 230x the 100 microrad/sqrt(Hz) shot-noise
+floor also used elsewhere in this repo. That combination (large, unambiguous
+peak vs. floor) is what panel (a) is showing.
+
+T_total = 3.15e7 s (~1 year) for the full-statistics run.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom  = 1.46e-25;  hbar = 1.055e-34
+G       = 6.67e-11;  g    = 9.81
+n       = 1000
+v_kick  = n * hbar * (2 * np.pi / 698e-9) / m_atom
+u0      = 24.5        # launch speed [m/s]
+T       = 2.5         # half-interferometry time [s]
+T_fly   = 2 * T
+T_cyc   = 5.0          # cycle time [s]
+dt      = 0.01
+
+N_fly   = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+T_total  = 3e7     # total observation time [s] (~1 year)
+N_cycles = int(T_total / T_cyc)
+f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
+
+delta_r = 70.0   # gradiometer baseline (matches 100m_oscillators)
+
+shot_noise_asd = 1e-4   # rad/sqrt(Hz), same level as elsewhere in this repo
+
+# ── colour-by-physical-origin palette (module level) ────────────────────────────
+# f_phi is always blue; f0 and all its harmonics (genuine or folded) are always
+# red; the periodogram/noise floor is always grey.
+COLORS = dict(
+    uldm        = '#1f4e9c',   # blue  -- f_phi (ULDM signal), always
+    fundamental = '#c1272d',   # red   -- f0 and its harmonics, always
+    harmonic    = '#c1272d',   # red   -- (genuine, sub-Nyquist harmonics)
+    folded      = '#c1272d',   # red   -- (folded / aliased harmonics)
+    noise       = '#9aa5ab',   # grey  -- periodogram / noise floor
+)
+
+# ── ULDM parameters ────────────────────────────────────────────────────────────
+f_phi       = 0.085   # moved off f_N = 0.1 Hz
+hbar_eV     = 6.582119569e-16                 # hbar in eV*s
+m_phi       = 2 * np.pi * f_phi * hbar_eV     # Compton relation, consistent with
+                                               # the m_phi=4e-16 <-> f_uldm=0.1 pairing
+                                               # used elsewhere in this repo
+G_nat       = 6.708e-39
+d_e         = 1e-3;  d_m_e      = 1e-3
+rho_phi     = 0.3
+theta       = np.pi / 2;  xi  = 0.06
+omega_A     = 2.67e15
+L_base      = 140.0
+n_lmt       = n;  conv_factor = 2.77e-12
+c_light     = 3e8
+
+def uldm_phase_vec(t, f_uldm, m_phi_val):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi_val)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * c_light))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / c_light) / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / c_light) / 2 + t) + theta))
+
+def uldm_amplitude(f_uldm, m_phi_val):
+    """Closed-form amplitude of uldm_phase_vec's cosine (no need to simulate)."""
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi_val)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * c_light))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / c_light) / 2))
+
+# ── Nyquist folding helper ──────────────────────────────────────────────────────
+def fold_frequency(f, fN):
+    """Fold f into [0, fN] by repeated reflection about multiples of fN
+    (i.e. standard aliasing against sampling frequency fs = 2*fN)."""
+    fs = 2 * fN
+    r = f % fs
+    return fs - r if r > fN else r
+
+# ── trajectory helpers (unchanged from 100m_oscillators) ────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h, M, D):
+    return -G * M / np.sqrt(D**2 + (z - h)**2)
+
+lower1 = arm_positions(0, 0, upper=False)
+upper1 = arm_positions(0, 0, upper=True)
+lower2 = arm_positions(delta_r, delta_r, upper=False)
+upper2 = arm_positions(delta_r, delta_r, upper=True)
+
+t_starts = np.arange(N_cycles) * T_cyc
+t_meas   = t_starts + T_fly
+
+def compute_phases(osc, circular=False, chunk=50_000):
+    """Vectorized, chunked over cycles.
+    circular=False: linear (up/down) GGN oscillator, h0 + amp*cos, D fixed.
+    circular=True:  source mass traces a circle of radius amp in the D-h
+                    plane (matches circular_oscillator / 100m_circular)."""
+    phases = np.empty(N_cycles)
+    for start in range(0, N_cycles, chunk):
+        end   = min(start + chunk, N_cycles)
+        t_abs = t_starts[start:end][:, None] + t_local[None, :]
+        osc_phase = 2 * np.pi * osc['f'] * t_abs
+        if circular:
+            h_osc = osc['h0'] + osc['amp'] * np.sin(osc_phase)
+            D_osc = osc['D'] + osc['amp'] * np.cos(osc_phase)
+        else:
+            h_osc = osc['h0'] + osc['amp'] * np.cos(osc_phase)
+            D_osc = osc['D']
+        dphi  = ((V(upper1, h_osc, osc['M'], D_osc) - V(lower1, h_osc, osc['M'], D_osc))
+               - (V(upper2, h_osc, osc['M'], D_osc) - V(lower2, h_osc, osc['M'], D_osc)))
+        phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
+        print(f"    cycles {end:,}/{N_cycles:,} done", flush=True)
+    return phases
+
+def add_noise(phases):
+    return phases + np.random.normal(0.0, shot_noise_asd / np.sqrt(T_cyc), size=N_cycles)
+
+def periodogram(ph):
+    f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
+    S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(ph - ph.mean()))**2
+    mask = f_k > 0
+    return f_k[mask], S_k[mask]
+
+def peak_at(f_k, S_k_urad, f_target):
+    idx = np.argmin(np.abs(f_k - f_target))
+    return f_k[idx], S_k_urad[idx]
+
+# ── oscillator definitions (same geometry, only f0 differs per panel) ──────────
+osc_common = dict(amp=0.5, M=1.0, D=3.0, h0=1.0)
+osc_b = dict(name='b', f=0.02,   **osc_common)   # sub-Nyquist comb
+osc_c = dict(name='c', f=0.131,  **osc_common)   # super-Nyquist, no coincidence
+osc_d = dict(name='d', f=0.1425, **osc_common)   # super-Nyquist, n=2 -> f_phi
+                                                  # (2D circular oscillator, see below)
+
+# ── run the pipeline ─────────────────────────────────────────────────────────
+print(f"Panel (a): ULDM only ({N_cycles:,} cycles, analytic)...")
+phases_a = add_noise(uldm_phase_vec(t_meas, f_phi, m_phi))
+
+print(f"Panel (b): oscillator f0={osc_b['f']} Hz ({N_cycles:,} cycles)...")
+phases_b = add_noise(compute_phases(osc_b))
+
+print(f"Panel (c): oscillator f0={osc_c['f']} Hz + ULDM ({N_cycles:,} cycles)...")
+phases_c = add_noise(compute_phases(osc_c) + uldm_phase_vec(t_meas, f_phi, m_phi))
+
+print(f"Panel (d): circular oscillator f0={osc_d['f']} Hz + ULDM ({N_cycles:,} cycles)...")
+phases_d = add_noise(compute_phases(osc_d, circular=True) + uldm_phase_vec(t_meas, f_phi, m_phi))
+
+f_k, S_a = periodogram(phases_a)
+_,   S_b = periodogram(phases_b)
+_,   S_c = periodogram(phases_c)
+_,   S_d = periodogram(phases_d)
+
+urad_a, urad_b, urad_c, urad_d = (np.sqrt(S) * 1e6 for S in (S_a, S_b, S_c, S_d))
+
+# ── diagnostics: harmonic / folding tables, printed so the caption numbers are
+#    read off the run rather than hard-coded ────────────────────────────────────
+def harmonic_table(label, osc, f_k, S_urad, n_max=5):
+    print(f"\nPanel ({label}): oscillator f0 = {osc['f']} Hz, M={osc['M']}, "
+          f"amp={osc['amp']}, D={osc['D']}, h0={osc['h0']}")
+    print(f"  {'n':>2}  {'n*f0 [Hz]':>10}  {'folded [Hz]':>12}  {'peak [urad/rtHz]':>18}  status")
+    rows = []
+    for k in range(1, n_max + 1):
+        f_true = k * osc['f']
+        f_fold = fold_frequency(f_true, f_N)
+        _, peak = peak_at(f_k, S_urad, f_fold)
+        status = 'genuine (< f_N)' if f_true <= f_N else 'folded/aliased'
+        print(f"  {k:>2}  {f_true:>10.4f}  {f_fold:>12.4f}  {peak:>18.4g}  {status}")
+        rows.append((k, f_true, f_fold, peak))
+    return rows
+
+rows_b = harmonic_table('b', osc_b, f_k, urad_b)
+rows_c = harmonic_table('c', osc_c, f_k, urad_c)
+rows_d = harmonic_table('d', osc_d, f_k, urad_d)
+
+f_phi_bin, peak_a = peak_at(f_k, urad_a, f_phi)
+print(f"\nPanel (a): ULDM peak at f_phi={f_phi} Hz -> {peak_a:.4g} urad/rtHz "
+      f"(bin f={f_phi_bin:.6f} Hz); shot-noise floor = {shot_noise_asd*1e6:.4g} urad/rtHz")
+
+oversampling_factor = f_N / f_phi
+print(f"\nOversampling factor (f_N / f_phi) = {oversampling_factor:.3f}")
+
+
+# ── plot style ─────────────────────────────────────────────────────────────────
+fig, (ax_a, ax_b, ax_c, ax_d) = plt.subplots(4, 1, figsize=(4.5, 32), sharex=True, dpi=200)
+axes = [ax_a, ax_b, ax_c, ax_d]
+
+y_max = 3 * max(peak_a, max(r[3] for r in rows_b[:4]),
+                 max(r[3] for r in rows_c[:3]), max(r[3] for r in rows_d[:3]))
+y_min = 0.1 * shot_noise_asd * 1e6
+
+for ax in axes:
+    ax.set_yscale('log')
+    ax.set_ylim(y_min, y_max)
+    ax.tick_params(labelsize=7)
+    ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
+    ax.set_xlim(0, f_N)
+
+fig.text(0.02, 0.5, r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=8,
+          rotation=90, va='center', ha='center')
+
+for ax, letter in zip(axes, 'abcd'):
+    ax.text(0.99, 0.93, f'({letter})', transform=ax.transAxes, ha='right', va='top',
+            fontsize=7, fontweight='bold')
+ax_a.text(f_N, y_max*0.6, r'  $f_N$', fontsize=6, ha='left', va='center')
+
+def multicolor_annotate(ax, xy, parts, xytext, fontsize=5, va='bottom'):
+    """Draw a left-to-right annotation whose text runs are each coloured
+    independently, chained by measuring each run's rendered width in turn.
+    Uses 'axes fraction' (not 'figure pixels') so positions survive
+    fig.savefig(..., bbox_inches='tight')'s re-crop, which otherwise shifts
+    fixed absolute-pixel coordinates -- especially badly on a tall,
+    multi-panel figure like this one."""
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    ax_bbox = ax.get_window_extent(renderer=renderer)
+    x, y = ax.transData.transform(xy)
+    x += xytext[0]
+    y += xytext[1]
+    xf = (x - ax_bbox.x0) / ax_bbox.width
+    yf = (y - ax_bbox.y0) / ax_bbox.height
+    for text, color in parts:
+        # xy=xy (not a dummy point) -- on a log-scale axis a placeholder like
+        # (0, 0) is invalid (log(0)) and silently breaks the annotation.
+        t = ax.annotate(text, xy=xy, xycoords='data',
+                         xytext=(xf, yf), textcoords='axes fraction',
+                         fontsize=fontsize, color=color, va=va, ha='left')
+        fig.canvas.draw()
+        xf = (t.get_window_extent(renderer=renderer).x1 - ax_bbox.x0) / ax_bbox.width
+
+# ── panel (a): ULDM only ────────────────────────────────────────────────────────
+ax_a.plot(f_k, urad_a, color=COLORS['noise'], lw=0.3)
+ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=5, s=8)
+ax_a.annotate(r'$f_\varphi$', (f_phi_bin, peak_a), textcoords='offset points',
+              xytext=(6, 6), fontsize=5, color=COLORS['uldm'])
+
+# ── panel (b): sub-Nyquist comb ──────────────────────────────────────────────────
+ax_b.plot(f_k, urad_b, color=COLORS['noise'], lw=0.3)
+b_offsets = {1: (4, 6), 2: (4, 6), 3: (4, 6), 4: (5, -8)}
+for k, f_true, f_fold, peak in rows_b[:4]:   # show up to 4*f0
+    col = COLORS['fundamental'] if k == 1 else COLORS['harmonic']
+    ax_b.scatter([f_fold], [peak], color=col, zorder=5, s=7)
+    label = r'$f_0$' if k == 1 else rf'${k}f_0$'
+    ax_b.annotate(label, (f_fold, peak), textcoords='offset points',
+                  xytext=b_offsets[k], fontsize=5, color=col)
+
+# ── panel (c): super-Nyquist folding ────────────────────────────────────────────
+ax_c.plot(f_k, urad_c, color=COLORS['noise'], lw=0.3)
+c_offsets = {1: (4, -2), 2: (-14, 6), 3: (0, 6)}   # f0 down; 2f0/3f0 left
+for k, f_true, f_fold, peak in rows_c[:3]:   # only show up to 3*f0
+    col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+    ax_c.scatter([f_fold], [peak], color=col, zorder=5, s=7)
+    label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
+    ax_c.annotate(label, (f_fold, peak), textcoords='offset points',
+                  xytext=c_offsets[k], fontsize=5, color=col, rotation=0)
+f_phi_bin_c, peak_uldm_c = peak_at(f_k, urad_c, f_phi)
+ax_c.scatter([f_phi_bin_c], [peak_uldm_c], color=COLORS['uldm'], zorder=5, s=8, marker='D')
+ax_c.annotate(r'$f_\varphi$', (f_phi_bin_c, peak_uldm_c), textcoords='offset points',
+              xytext=(6, -6), fontsize=5, color=COLORS['uldm'])
+
+# ── panel (d): degeneracy ────────────────────────────────────────────────────────
+ax_d.plot(f_k, urad_d, color=COLORS['noise'], lw=0.3)
+d_offsets = {1: (4, -2), 3: (0, 6), 4: (4, -2)}   # f0 down; 3f0 left; 4f0 down
+for k, f_true, f_fold, peak in rows_d[:4]:   # up to 4*f0 (n=2 shown separately)
+    if abs(f_fold - f_phi) < 1e-6:
+        continue   # n=2 folds exactly onto f_phi -- labelled once, below
+    col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+    ax_d.scatter([f_fold], [peak], color=col, zorder=5, s=7)
+    label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
+    ax_d.annotate(label, (f_fold, peak), textcoords='offset points',
+                  xytext=d_offsets[k], fontsize=5, color=col)
+f_phi_bin_d, peak_uldm_d = peak_at(f_k, urad_d, f_phi)
+# combined f_phi/2f0 peak: two-tone marker (red ring, blue centre) since the
+# bin is a coherent sum of both signals; label coloured to match each part.
+ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['fundamental'], zorder=5, s=18, marker='D')
+ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['uldm'], zorder=6, s=7, marker='D')
+multicolor_annotate(ax_d, (f_phi_bin_d, peak_uldm_d),
+                     [(r'$f_\varphi$', COLORS['uldm']),
+                      (' & ', 'black'),
+                      (r'$2f_0$ (folded)', COLORS['fundamental'])],
+                     xytext=(-58, 16), fontsize=5)
+
+ax_d.set_xlabel('$f$ [Hz]', fontsize=8)
+
+fig.savefig(r'C:\Users\Georg\Desktop\fig2_uldm_folding.jpg', dpi=200, bbox_inches='tight')
+
+# ── suggested caption, printed so it's reproducible from the run ───────────────
+print("\n" + "=" * 78)
+print("Suggested caption:")
+print(f"  dt = T_cyc = {T_cyc:g} s, N_cycles = {N_cycles:,}, T_obs = {T_total:.3g} s, "
+      f"f_N = {f_N:g} Hz, oversampling factor f_N/f_phi = {oversampling_factor:.3f}.")
+print(f"  ULDM: f_phi = {f_phi} Hz, m_phi = {m_phi:.4g} eV, shot-noise floor = "
+      f"{shot_noise_asd*1e6:.4g} urad/sqrt(Hz).")
+for label, osc in (('b', osc_b), ('c', osc_c), ('d', osc_d)):
+    print(f"  Oscillator ({label}): f0 = {osc['f']} Hz, M = {osc['M']}, "
+          f"amp = {osc['amp']} m, D = {osc['D']} m, h0 = {osc['h0']} m.")
+print("=" * 78)
+
+plt.show()
