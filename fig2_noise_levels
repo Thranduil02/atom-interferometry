@@ -283,6 +283,7 @@ if __name__ == "__main__":
 
     # ── panel (a): ULDM only ─────────────────────────────────────────────────
     plot_noise_stack(ax_a, spec_a)
+    ax_a.vlines(f_phi_bin, y_min, peak_a, color=COLORS['uldm'], lw=0.6, zorder=9)
     ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=10, s=8)
     ax_a.annotate(r'$f_\varphi$', (f_phi_bin, peak_a), textcoords='offset points',
                   xytext=(6, 6), fontsize=5, color=COLORS['uldm'])
@@ -294,6 +295,7 @@ if __name__ == "__main__":
     b_offsets = {1: (4, 6), 2: (4, 6), 3: (4, 6), 4: (5, -8)}
     for k, f_true, f_fold, peak in rows_b[:4]:
         col = COLORS['fundamental'] if k == 1 else COLORS['harmonic']
+        ax_b.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=9)
         ax_b.scatter([f_fold], [peak], color=col, zorder=10, s=7)
         label = r'$f_0$' if k == 1 else rf'${k}f_0$'
         ax_b.annotate(label, (f_fold, peak), textcoords='offset points',
@@ -304,11 +306,13 @@ if __name__ == "__main__":
     c_offsets = {1: (4, -2), 2: (-14, 6), 3: (0, 6)}
     for k, f_true, f_fold, peak in rows_c[:3]:
         col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+        ax_c.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=9)
         ax_c.scatter([f_fold], [peak], color=col, zorder=10, s=7)
         label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
         ax_c.annotate(label, (f_fold, peak), textcoords='offset points',
                       xytext=c_offsets[k], fontsize=5, color=col)
     f_phi_bin_c, peak_uldm_c = peak_at(f_k, urad_c_top, f_phi)
+    ax_c.vlines(f_phi_bin_c, y_min, peak_uldm_c, color=COLORS['uldm'], lw=0.6, zorder=9)
     ax_c.scatter([f_phi_bin_c], [peak_uldm_c], color=COLORS['uldm'], zorder=10, s=8, marker='D')
     ax_c.annotate(r'$f_\varphi$', (f_phi_bin_c, peak_uldm_c), textcoords='offset points',
                   xytext=(6, -6), fontsize=5, color=COLORS['uldm'])
@@ -320,11 +324,13 @@ if __name__ == "__main__":
         if abs(f_fold - f_phi) < 1e-6:
             continue
         col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+        ax_d.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=9)
         ax_d.scatter([f_fold], [peak], color=col, zorder=10, s=7)
         label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
         ax_d.annotate(label, (f_fold, peak), textcoords='offset points',
                       xytext=d_offsets[k], fontsize=5, color=col)
     f_phi_bin_d, peak_uldm_d = peak_at(f_k, urad_d_top, f_phi)
+    ax_d.vlines(f_phi_bin_d, y_min, peak_uldm_d, color=COLORS['fundamental'], lw=0.6, zorder=9)
     ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['fundamental'], zorder=10, s=18, marker='D')
     ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['uldm'], zorder=11, s=7, marker='D')
     multicolor_annotate(ax_d, (f_phi_bin_d, peak_uldm_d),
