@@ -50,15 +50,15 @@ f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 delta_r = 70.0   # gradiometer baseline (matches 100m_oscillators)
 
 # ── two shot-noise levels compared on the same axes ─────────────────────────────
-# The periodogram/noise-floor traces stay neutral (warm sand/tan family,
+# The periodogram/noise-floor traces stay neutral (muted sage-green family,
 # distinct shade per level) -- colour is reserved for the peaks (ULDM = blue,
 # oscillator harmonics = red), drawn on top via scatter markers, so "what's
 # signal" and "what's noise floor" never share a colour channel.
 NOISE_LEVELS = [
     dict(asd=1e-4, key='baseline', label=r'$10^{-4}$ rad/$\sqrt{\mathrm{Hz}}$ (baseline)',
-         color='#d9c9a8', alpha=0.75, lw=0.3, zorder=2),
+         color='#a8bdae', alpha=0.75, lw=0.3, zorder=2),
     dict(asd=1e-5, key='stretch',  label=r'$10^{-5}$ rad/$\sqrt{\mathrm{Hz}}$ (stretch)',
-         color='#6b573a', alpha=0.9,  lw=0.35, zorder=3),
+         color='#3f5449', alpha=0.9,  lw=0.35, zorder=3),
 ]
 
 # ── colour-by-physical-origin palette (module level) ────────────────────────────
