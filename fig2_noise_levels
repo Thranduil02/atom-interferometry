@@ -1,25 +1,29 @@
 """
 Figure 2 variant: same four panels as fig2_uldm_folding (ULDM peak, sub-Nyquist
 comb, super-Nyquist folding, folded-harmonic/ULDM degeneracy), but each panel
-now overlays THREE shot-noise floors instead of one:
+now overlays TWO shot-noise floors instead of one:
 
-    1e-3 rad/sqrt(Hz)  "initial"   -- lightest, most transparent, drawn first
-    1e-4 rad/sqrt(Hz)  "baseline"  -- medium
-    1e-5 rad/sqrt(Hz)  "stretch"   -- darkest, most opaque, drawn last (on top)
+    1e-4 rad/sqrt(Hz)  "baseline"  -- lighter grey, drawn first
+    1e-5 rad/sqrt(Hz)  "stretch"   -- darker grey, drawn last (on top)
+
+Both noise-floor traces stay neutral grey (distinct shades so the two levels
+are still distinguishable from each other); colour is reserved for the peak
+markers on top (ULDM = blue, oscillator harmonics = red), so signal and noise
+floor never share a colour channel.
 
 The underlying physical signal (oscillator trajectory integral + ULDM tone) is
-identical across the three -- only the shot-noise realization added on top
-differs. To avoid tripling the expensive part of the computation, each
+identical across both -- only the shot-noise realization added on top
+differs. To avoid doubling the expensive part of the computation, each
 panel's noiseless phase series (compute_phases(...)/uldm_phase_vec(...)) is
-computed ONCE and reused for all three noise draws; only add_noise() +
-periodogram() (cheap: one np.random.normal draw and one FFT) run three times
-per panel.
+computed ONCE and reused for both noise draws; only add_noise() +
+periodogram() (cheap: one np.random.normal draw and one FFT) run twice per
+panel.
 
 Device/ULDM parameters are copied verbatim from fig2_uldm_folding (100 m
 instrument, T_cyc = 5 s -> f_N = 0.1 Hz, T_obs = 3.15e7 s). Harmonic/peak
 markers and annotations are placed using the "stretch" (1e-5, quietest)
 realization, since that trace sits closest to the noiseless truth and is
-drawn on top of the other two.
+drawn on top of the other one.
 """
 
 import numpy as np
@@ -39,20 +43,22 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 3.15e7   # total observation time [s] (~1 year)
+T_total  = 1e6   # total observation time [s] (~1 year)
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
 delta_r = 70.0   # gradiometer baseline (matches 100m_oscillators)
 
-# ── three shot-noise levels compared on the same axes ───────────────────────────
+# ── two shot-noise levels compared on the same axes ─────────────────────────────
+# The periodogram/noise-floor traces stay neutral (grey family, distinct shade
+# per level) -- colour is reserved for the peaks (ULDM = blue, oscillator
+# harmonics = red), drawn on top via scatter markers, so "what's signal" and
+# "what's noise floor" never share a colour channel.
 NOISE_LEVELS = [
-    dict(asd=1e-3, key='initial',  label=r'$10^{-3}$ rad/$\sqrt{\mathrm{Hz}}$ (initial)',
-         color='#c7d0d6', alpha=0.85, lw=0.3, zorder=2),
     dict(asd=1e-4, key='baseline', label=r'$10^{-4}$ rad/$\sqrt{\mathrm{Hz}}$ (baseline)',
-         color='#7c8a94', alpha=0.85, lw=0.35, zorder=3),
+         color='#a8b0b6', alpha=0.75, lw=0.3, zorder=2),
     dict(asd=1e-5, key='stretch',  label=r'$10^{-5}$ rad/$\sqrt{\mathrm{Hz}}$ (stretch)',
-         color='#20262b', alpha=0.9,  lw=0.4, zorder=4),
+         color='#20262b', alpha=0.9,  lw=0.35, zorder=3),
 ]
 
 # ── colour-by-physical-origin palette (module level) ────────────────────────────
@@ -250,9 +256,9 @@ if __name__ == "__main__":
     ax_a.text(f_N, y_max*0.6, r'  $f_N$', fontsize=6, ha='left', va='center')
 
     def plot_noise_stack(ax, spec):
-        """Draw the three noise-level traces back-to-front (lightest/noisiest
-        first, darkest/quietest last) so the quiet trace's structure stays on
-        top and legible."""
+        """Draw the noise-level traces back-to-front (noisiest/baseline
+        first, quietest/stretch last/on top), each in its own neutral grey
+        shade. Colour is reserved for the peak markers, drawn separately."""
         for lvl in NOISE_LEVELS:
             f_k, urad = spec[lvl['key']]
             ax.plot(f_k, urad, color=lvl['color'], alpha=lvl['alpha'],
