@@ -284,7 +284,7 @@ if __name__ == "__main__":
     # ── panel (a): ULDM only ─────────────────────────────────────────────────
     plot_noise_stack(ax_a, spec_a)
     ax_a.vlines(f_phi_bin, y_min, peak_a, color=COLORS['uldm'], lw=0.6, zorder=9)
-    ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=10, s=8)
+    ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=10, s=8, marker='D')
     ax_a.annotate(r'$f_\varphi$', (f_phi_bin, peak_a), textcoords='offset points',
                   xytext=(6, 6), fontsize=5, color=COLORS['uldm'])
     ax_a.legend(loc='upper left', fontsize=4.5, frameon=False, handlelength=1.2,

@@ -60,7 +60,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 1e6   # total observation time [s] (~1 year), same as fig2_uldm_folding
+T_total  = 3e7   # total observation time [s] (~1 year), same as fig2_uldm_folding
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.25 Hz
 
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     axes = [ax_a, ax_b, ax_c, ax_d]
 
     y_max = 3 * max(peak_a, max(r[3] for r in rows_b[:4]),
-                     max(r[3] for r in rows_c[:3]), max(r[3] for r in rows_d[:3]))
+                     max(r[3] for r in rows_c[:4]), max(r[3] for r in rows_d[:5]))
     y_min = 0.1 * shot_noise_asd * 1e6
 
     for ax in axes:
@@ -294,7 +294,8 @@ if __name__ == "__main__":
 
     # ── panel (a): ULDM only ─────────────────────────────────────────────────
     ax_a.plot(f_k, urad_a, color=COLORS['noise'], lw=0.3)
-    ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=5, s=8)
+    ax_a.vlines(f_phi_bin, y_min, peak_a, color=COLORS['uldm'], lw=0.6, zorder=4)
+    ax_a.scatter([f_phi_bin], [peak_a], color=COLORS['uldm'], zorder=5, s=8, marker='D')
     ax_a.annotate(r'$f_\varphi$', (f_phi_bin, peak_a), textcoords='offset points',
                   xytext=(6, 6), fontsize=5, color=COLORS['uldm'])
 
@@ -303,6 +304,7 @@ if __name__ == "__main__":
     b_offsets = {1: (4, 6), 2: (4, 6), 3: (4, 6), 4: (5, -8)}
     for k, f_true, f_fold, peak in rows_b[:4]:   # show up to 4*f0
         col = COLORS['fundamental'] if k == 1 else COLORS['harmonic']
+        ax_b.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=4)
         ax_b.scatter([f_fold], [peak], color=col, zorder=5, s=7)
         label = r'$f_0$' if k == 1 else rf'${k}f_0$'
         ax_b.annotate(label, (f_fold, peak), textcoords='offset points',
@@ -310,32 +312,39 @@ if __name__ == "__main__":
 
     # ── panel (c): super-Nyquist folding ─────────────────────────────────────
     ax_c.plot(f_k, urad_c, color=COLORS['noise'], lw=0.3)
-    c_offsets = {1: (4, -2), 2: (-14, 6), 3: (0, 6)}   # f0 down; 2f0/3f0 left
-    for k, f_true, f_fold, peak in rows_c[:3]:   # only show up to 3*f0
+    c_offsets = {1: (4, -2), 2: (-14, 6), 3: (0, 6), 4: (-4, 8)}   # f0 down; 2f0/3f0 left; 4f0 left of f_phi
+    c_ha = {4: 'right'}
+    for k, f_true, f_fold, peak in rows_c[:4]:   # show up to 4*f0
         col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+        ax_c.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=4)
         ax_c.scatter([f_fold], [peak], color=col, zorder=5, s=7)
         label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
         ax_c.annotate(label, (f_fold, peak), textcoords='offset points',
-                      xytext=c_offsets[k], fontsize=5, color=col, rotation=0)
+                      xytext=c_offsets[k], fontsize=5, color=col, rotation=0,
+                      ha=c_ha.get(k, 'left'))
     f_phi_bin_c, peak_uldm_c = peak_at(f_k, urad_c, f_phi)
+    ax_c.vlines(f_phi_bin_c, y_min, peak_uldm_c, color=COLORS['uldm'], lw=0.6, zorder=4)
     ax_c.scatter([f_phi_bin_c], [peak_uldm_c], color=COLORS['uldm'], zorder=5, s=8, marker='D')
     ax_c.annotate(r'$f_\varphi$', (f_phi_bin_c, peak_uldm_c), textcoords='offset points',
                   xytext=(6, -6), fontsize=5, color=COLORS['uldm'])
 
     # ── panel (d): degeneracy ─────────────────────────────────────────────────
     ax_d.plot(f_k, urad_d, color=COLORS['noise'], lw=0.3)
-    d_offsets = {1: (4, -2), 3: (0, 6), 4: (4, -2)}   # f0 down; 3f0 left; 4f0 down
-    for k, f_true, f_fold, peak in rows_d[:4]:   # up to 4*f0 (n=2 shown separately)
+    d_offsets = {1: (4, -2), 3: (0, 6), 4: (4, -2), 5: (6, 4)}   # f0 down; 3f0 left; 4f0 down; 5f0 right
+    d_ha = {5: 'left'}
+    for k, f_true, f_fold, peak in rows_d[:5]:   # up to 5*f0 (n=2 shown separately)
         if abs(f_fold - f_phi) < 1e-6:
             continue   # n=2 folds exactly onto f_phi -- labelled once, below
         col = COLORS['fundamental'] if k == 1 else COLORS['folded']
+        ax_d.vlines(f_fold, y_min, peak, color=col, lw=0.6, zorder=4)
         ax_d.scatter([f_fold], [peak], color=col, zorder=5, s=7)
         label = r'$f_0$ (folded)' if k == 1 else rf'${k}f_0$ (folded)'
         ax_d.annotate(label, (f_fold, peak), textcoords='offset points',
-                      xytext=d_offsets[k], fontsize=5, color=col)
+                      xytext=d_offsets[k], fontsize=5, color=col, ha=d_ha.get(k, 'left'))
     f_phi_bin_d, peak_uldm_d = peak_at(f_k, urad_d, f_phi)
     # combined f_phi/2f0 peak: two-tone marker (red ring, blue centre) since the
     # bin is a coherent sum of both signals; label coloured to match each part.
+    ax_d.vlines(f_phi_bin_d, y_min, peak_uldm_d, color=COLORS['fundamental'], lw=0.6, zorder=4)
     ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['fundamental'], zorder=5, s=18, marker='D')
     ax_d.scatter([f_phi_bin_d], [peak_uldm_d], color=COLORS['uldm'], zorder=6, s=7, marker='D')
     multicolor_annotate(ax_d, (f_phi_bin_d, peak_uldm_d),
