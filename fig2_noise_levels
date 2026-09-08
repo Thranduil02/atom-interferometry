@@ -43,7 +43,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 1e6   # total observation time [s] (~1 year)
+T_total  = 3e7   # total observation time [s] (~1 year)
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
