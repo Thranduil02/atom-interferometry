@@ -65,7 +65,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 3e7   # total observation time [s]
+T_total  = 1e6   # total observation time [s]
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
@@ -374,9 +374,12 @@ if __name__ == "__main__":
               va='top', fontsize=7, fontweight='bold')
 
     # ── figure 2: horizontal vs. vertical circle comb, overlaid ─────────────────
-    _, S_horiz = periodogram(add_noise(phases_c, NOISE_LEVELS[0]['asd']))
+    # one shared noise realization for both traces, so they sit on the same
+    # noise floor rather than each carrying its own independent draw.
+    noise_vec  = np.random.normal(0.0, NOISE_LEVELS[0]['asd'] / np.sqrt(T_cyc), size=N_cycles)
+    _, S_horiz = periodogram(phases_c + noise_vec)
     urad_horiz = np.sqrt(S_horiz) * 1e6
-    _, S_vert  = periodogram(add_noise(phases_c_vert, NOISE_LEVELS[0]['asd']))
+    _, S_vert  = periodogram(phases_c_vert + noise_vec)
     urad_vert  = np.sqrt(S_vert) * 1e6
 
     rows_horiz = harmonic_table('fig2, horizontal', src_c, f_k, urad_horiz)
