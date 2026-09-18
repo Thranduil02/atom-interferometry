@@ -20,7 +20,7 @@ each periodogram panel instead of shown separately.
       panel (c) / fig2_circle_summary.py panel (c).
 
   (d) Line plot (not a bar chart): the ratio of the 2f0 peak to the f0 peak
-      (both folded), for a circle inclined at theta = 0, 10, 20, ..., 360
+      (both folded), for a circle inclined at theta = 0, 5, 10, ..., 360
       deg. A horizontal circle's height never changes, so its motion is a
       pure cos(phi) in D -- its comb is symmetric and 2f0/f0 is small. A
       vertical circle modulates height and horizontal distance out of
@@ -28,12 +28,18 @@ each periodogram panel instead of shown separately.
       range (rather than stopping at 180) shows the ratio retracing itself
       every 180 deg, which is a useful internal sanity check.
 
+A second, separate figure extends panel (c): it overlays the folded combs
+of the horizontal (incline=0) and vertical (incline=90) circles, both at
+F_CIRC, on the same log-scale periodogram axes (no ULDM tone plotted here),
+colour-coded so the two geometries' harmonic content can be compared
+directly.
+
 Only ONE noise floor is used throughout (baseline, 1e-5 rad/sqrt(Hz)),
 plotted in a light green rather than the sand/tan house colour used
 elsewhere.
 
 This script does NOT save any file -- it just calls plt.show() so the
-figure appears in whatever interactive backend is active.
+figures appear in whatever interactive backend is active.
 
 Provenance: constants, the ULDM tone, fold_frequency, the trajectory
 helpers (atom_path/arm_positions), the potential V, the phase integral
@@ -73,7 +79,7 @@ NOISE_LEVELS = [
 # ── geometry parameters specific to this figure ─────────────────────────────────
 F_SLOW    = 0.02    # panel (a): sub-Nyquist, shows the unfolded nonlinearity comb
 F_CIRC    = 0.131   # panels (b)/(c)/(d): shared super-Nyquist fundamental (folds)
-THETA_DEG = np.arange(0.0, 360.0 + 1e-9, 10.0)   # panel (d) sweep, every 10 deg, full turn
+THETA_DEG = np.arange(0.0, 360.0 + 1e-9, 5.0)    # panel (d) sweep, every 5 deg, full turn
 
 # ── colour-by-physical-origin palette (verbatim) ────────────────────────────────
 COLORS = dict(
@@ -193,6 +199,8 @@ src_a = dict(name='a', f=F_SLOW, traj=traj_linear, **src_common)
 src_b = dict(name='b', f=F_CIRC, traj=traj_linear, **src_common)
 src_c = dict(name='c', f=F_CIRC, traj=traj_inclined_circle, incline_deg=0.0,
              **src_common)
+src_c_vert = dict(name='c_vert', f=F_CIRC, traj=traj_inclined_circle, incline_deg=90.0,
+                   **src_common)
 
 def harmonic_table(label, src, f_k, S_urad, n_max=4):
     """Same format as fig2_circle_summary.py's harmonic_table() (no
@@ -223,7 +231,12 @@ if __name__ == "__main__":
 
     print(f"Panel (c): horizontal circle f0={F_CIRC:.4f} Hz (folds) + ULDM "
           f"({N_cycles:,} cycles)...")
-    raw_c = compute_phases(src_c) + uldm
+    phases_c = compute_phases(src_c)
+    raw_c = phases_c + uldm
+
+    print(f"Figure 2: vertical circle f0={F_CIRC:.4f} Hz (folds), no ULDM "
+          f"({N_cycles:,} cycles)...")
+    phases_c_vert = compute_phases(src_c_vert)
 
     # single noise floor, for each of panels a/b/c
     raws = {'a': raw_a, 'b': raw_b, 'c': raw_c}
@@ -347,8 +360,7 @@ if __name__ == "__main__":
 
     # panel (d): line plot of the 2f0/f0 ratio vs. inclination, every 10 deg
     line_vals = [ratio_2f0_f0[th] for th in THETA_DEG]
-    ax_d.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2,
-              marker='o', ms=2.5)
+    ax_d.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
     ax_d.set_xlim(0, 360)
     ax_d.set_xticks(np.arange(0, 361, 45))
     ax_d.set_xlabel('circle inclination $\\theta$ [deg] (0=horiz., 90=vert.)', fontsize=7)
@@ -360,6 +372,47 @@ if __name__ == "__main__":
     ax_d.axhline(ratio_2f0_f0[90.0], color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d.text(0.99, 0.93, '(d)', transform=ax_d.transAxes, ha='right',
               va='top', fontsize=7, fontweight='bold')
+
+    # ── figure 2: horizontal vs. vertical circle comb, overlaid ─────────────────
+    _, S_horiz = periodogram(add_noise(phases_c, NOISE_LEVELS[0]['asd']))
+    urad_horiz = np.sqrt(S_horiz) * 1e6
+    _, S_vert  = periodogram(add_noise(phases_c_vert, NOISE_LEVELS[0]['asd']))
+    urad_vert  = np.sqrt(S_vert) * 1e6
+
+    rows_horiz = harmonic_table('fig2, horizontal', src_c, f_k, urad_horiz)
+    rows_vert  = harmonic_table('fig2, vertical', src_c_vert, f_k, urad_vert)
+
+    COLOR_HORIZ = COLORS['fundamental']   # red, matches panel (c)
+    COLOR_VERT  = COLORS['uldm']          # blue, visually distinct from horizontal
+
+    fig2, ax2 = plt.subplots(figsize=(6, 4), dpi=200)
+    ax2.set_yscale('log')
+    ax2.set_xlim(0, f_N)
+    y_min2 = 0.1 * NOISE_LEVELS[0]['asd'] * 1e6
+    y_max2 = 3 * max(max(r[3] for r in rows_horiz), max(r[3] for r in rows_vert))
+    ax2.set_ylim(y_min2, y_max2)
+    ax2.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
+    ax2.plot(f_k, urad_horiz, color=COLOR_HORIZ, lw=0.5, alpha=0.5,
+             label='horizontal circle (incline=0°)')
+    ax2.plot(f_k, urad_vert, color=COLOR_VERT, lw=0.5, alpha=0.5,
+             label='vertical circle (incline=90°)')
+
+    for rows_geom, col in ((rows_horiz, COLOR_HORIZ), (rows_vert, COLOR_VERT)):
+        for k, f_true, f_fold, peak, f_bin in rows_geom:
+            ax2.vlines(f_bin, y_min2, peak, color=col, lw=0.6, zorder=4)
+            ax2.scatter([f_bin], [peak], color=col, zorder=5, s=10)
+            base = r'$f_0$' if k == 1 else rf'${k}f_0$'
+            label = base + ' (folded)' if f_true > f_N else base
+            ax2.annotate(label, (f_bin, peak), textcoords='offset points',
+                         xytext=(4, 6), fontsize=6, color=col)
+
+    ax2.set_xlabel('$f$ [Hz]', fontsize=9)
+    ax2.set_ylabel(r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=9)
+    ax2.tick_params(labelsize=8)
+    ax2.legend(fontsize=7, loc='upper right', frameon=False)
+    ax2.set_title(f'Folded comb: horizontal vs. vertical circle, $f_0$={F_CIRC:g} Hz',
+                  fontsize=9)
+    fig2.tight_layout()
 
     print("\n" + "=" * 78)
     print("Suggested caption:")
