@@ -342,7 +342,7 @@ if __name__ == "__main__":
 
     plot_noise_stack(ax_a, 'a')
     mark_harmonics(ax_a, 'a', folded=False,
-                   offsets={1: (4, 6), 2: (4, 6), 3: (4, 6), 4: (5, -8)})
+                   offsets={1: (4, -8), 2: (4, 6), 3: (4, 6), 4: (5, -8)})
     mark_uldm(ax_a, 'a', xytext=(6, -6))
     ax_a.legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
                                      label=lvl['label']) for lvl in NOISE_LEVELS],
