@@ -166,14 +166,18 @@ def upper_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
     return t, path
 
 # ── Build trajectories ────────────────────────────────────────────────────────
-N  = 50_000
-dt = 0.01
-timestep = np.arange(0, N * 2, dt)
+T_total  = 1e6   # total simulated observation time [s]
+T_cycle  = 2.0          # duration of one launch/measurement cycle [s] (also the
+                        # subsampling spacing used below, and lower_arm/upper_arm's
+                        # default total_time)
+dt       = 0.01
+N        = int(round(T_total / T_cycle))
+timestep = np.arange(0, N * T_cycle, dt)
 
-lower1 = np.concatenate([lower_arm(0, u_initial, 0, T, dt, -g, 0)[1] for _ in range(N)])
-lower2 = np.concatenate([lower_arm(5, u_initial, 0, T, dt, -g, 5)[1] for _ in range(N)])
-upper1 = np.concatenate([upper_arm(0, u_initial, 0, T, dt, -g, 0)[1] for _ in range(N)])
-upper2 = np.concatenate([upper_arm(5, u_initial, 0, T, dt, -g, 5)[1] for _ in range(N)])
+lower1 = np.concatenate([lower_arm(0, u_initial, 0, T, dt, -g, 0, total_time=T_cycle)[1] for _ in range(N)])
+lower2 = np.concatenate([lower_arm(5, u_initial, 0, T, dt, -g, 5, total_time=T_cycle)[1] for _ in range(N)])
+upper1 = np.concatenate([upper_arm(0, u_initial, 0, T, dt, -g, 0, total_time=T_cycle)[1] for _ in range(N)])
+upper2 = np.concatenate([upper_arm(5, u_initial, 0, T, dt, -g, 5, total_time=T_cycle)[1] for _ in range(N)])
 
 t_full    = timestep[:len(lower1)]
 interp_l1 = interp1d(t_full, lower1, bounds_error=False, fill_value=(lower1[0], lower1[-1]))
@@ -211,7 +215,7 @@ for i, alpha in enumerate(alpha_grid):
 V_interp = RectBivariateSpline(alpha_grid, z_grid, V_grid)
 
 # ── Phase difference ──────────────────────────────────────────────────────────
-subsample_times = np.arange(2*T, timestep.max(), 2)
+subsample_times = np.arange(2*T, timestep.max(), T_cycle)
 
 print(f"\nComputing phase differences ({len(subsample_times)} measurements) ...")
 dp1 = np.empty(len(subsample_times))
@@ -231,31 +235,185 @@ for k, t_c in enumerate(subsample_times):
     dp1[k] = (m_atom / hbar) * p1
     dp2[k] = (m_atom / hbar) * p2
 
-phase_diff = dp1 - dp2
-pd_ac      = phase_diff - phase_diff.mean()
-max_pd     = np.max(np.abs(pd_ac))
+phase_diff_raw = dp1 - dp2
+pd_ac          = phase_diff_raw - phase_diff_raw.mean()   # AC phase used in every top panel
+max_pd         = np.max(np.abs(pd_ac))
 print(f"  Max |ΔΦ| (AC) = {max_pd*1e6:.4f} µrad")
 
-# ── PSD ───────────────────────────────────────────────────────────────────────
-delta_t = 2.0
-N_meas  = len(phase_diff)
-S_k     = (delta_t / N_meas) * np.abs(np.fft.rfft(pd_ac))**2
-f_k     = np.fft.rfftfreq(N_meas, d=delta_t)
+# ── ULDM tone (verbatim model from fig2_final.py, this scaffold's own geometry) ─
+delta_r     = 5.0     # gradiometer baseline: IFO2 sits 5 m above IFO1
+T_fly       = 2 * T   # full interferometer flight time
+f_phi       = 0.05    # ULDM Compton frequency [Hz]
+hbar_eV     = 6.582119569e-16                 # hbar in eV*s
+m_phi       = 2 * np.pi * f_phi * hbar_eV     # Compton relation
+G_nat       = 6.708e-39
+d_e         = 1e-3;  d_m_e      = 1e-3
+rho_phi     = 0.3
+uldm_theta  = np.pi / 2;  xi  = 0.06
+omega_A     = 2.67e15
+L_base      = 140.0
+n_lmt       = n_kicks;  conv_factor = 2.77e-12
+c_light     = 3e8
 
-# ── Figures ───────────────────────────────────────────────────────────────────
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
+def uldm_phase_vec(t, f_uldm, m_phi_val):
+    delta_omega_A = (omega_A * np.sqrt(G_nat * 4 * np.pi)
+                     * (d_m_e + (2 + xi) * d_e)
+                     * (np.sqrt(2 * rho_phi) / m_phi_val)
+                     * conv_factor)
+    omega_phi = 2 * np.pi * f_uldm
+    return (8 * (delta_omega_A / omega_phi) * (delta_r / L_base)
+            * np.sin(omega_phi * n_lmt * L_base / (2 * c_light))
+            * np.sin(omega_phi * (T - (n_lmt - 1) * L_base / c_light) / 2)
+            * np.cos(omega_phi * ((T_fly + L_base / c_light) / 2 + t) + uldm_theta))
 
-mask_100s = subsample_times <= 100
-ax1.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o-', color='blue')
-ax1.set_xlabel('$t$ [s]', fontsize=16)
-ax1.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=16)
+uldm             = uldm_phase_vec(subsample_times, f_phi, m_phi)
+phase_diff_uldm  = phase_diff_raw + uldm
 
-ax2.plot(f_k[1:], np.sqrt(S_k[1:]) * 1e6, color='firebrick')
-ax2.set_xlabel('$f$ [Hz]', fontsize=16)
-ax2.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=16)
-ax2.set_xlim(0, 0.5 / delta_t)
+# ── PSD helpers ───────────────────────────────────────────────────────────────
+delta_t = T_cycle
+N_meas  = len(phase_diff_raw)
+f_N     = 0.5 / delta_t
 
-fig.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff.png', dpi=200)
+def periodogram(ph):
+    f_k  = np.fft.rfftfreq(N_meas, d=delta_t)
+    S_k  = (delta_t / N_meas) * np.abs(np.fft.rfft(ph - ph.mean()))**2
+    mask = f_k > 0
+    return f_k[mask], S_k[mask]
+
+def add_noise(ph, shot_noise_asd):
+    return ph + np.random.normal(0.0, shot_noise_asd / np.sqrt(delta_t), size=len(ph))
+
+def fold_frequency(f, fN):
+    fs = 2 * fN
+    r = f % fs
+    return fs - r if r > fN else r
+
+def peak_at(f_k, S_urad, f_target):
+    idx = np.argmin(np.abs(f_k - f_target))
+    return f_k[idx], S_urad[idx]
+
+f_k, S_k_raw  = periodogram(phase_diff_raw)
+_,   S_k_uldm = periodogram(phase_diff_uldm)
+urad_raw      = np.sqrt(S_k_raw) * 1e6
+urad_uldm     = np.sqrt(S_k_uldm) * 1e6
+
+# ── Noise floors (house style from fig2_circle_summary.py, shades of green) ────
+NOISE_LEVELS = [
+    dict(key='baseline', asd=1e-4, label='baseline (1e-4)', color='#a8d9a8', lw=0.4, zorder=2),
+    dict(key='stretch',  asd=1e-5, label='stretch (1e-5)',  color='#1b5e20', lw=0.5, zorder=3),
+]
+urad_noise = {}
+for lvl in NOISE_LEVELS:
+    _, S = periodogram(add_noise(phase_diff_uldm, lvl['asd']))
+    urad_noise[lvl['key']] = np.sqrt(S) * 1e6
+# markers in the third figure are read off the noisier "baseline" trace,
+# same convention as fig2_circle_summary.py
+urad_noise_marker = urad_noise['baseline']
+
+# ── colour-by-physical-origin palette (verbatim from fig2_final.py) ─────────────
+COLORS = dict(
+    uldm        = '#1f4e9c',   # blue  -- f_phi (ULDM signal), always
+    fundamental = '#c1272d',   # red   -- scaffold vibration modes, always
+)
+
+f_phi_bin, f_phi_peak_uldm  = peak_at(f_k, urad_uldm, f_phi)
+_,         f_phi_peak_noise = peak_at(f_k, urad_noise_marker, f_phi)
+print(f"\nULDM peak at f_phi = {f_phi} Hz: {f_phi_peak_uldm:.4g} urad/rtHz (bin {f_phi_bin:.4f} Hz)")
+
+def mode_rows_for(urad):
+    rows = []
+    for m in modes:
+        f_fold = fold_frequency(m['f'], f_N)
+        f_bin, peak = peak_at(f_k, urad, f_fold)
+        rows.append(dict(f0=m['f'], f_bin=f_bin, peak=peak, folded=m['f'] > f_N))
+    return rows
+
+rows_raw   = mode_rows_for(urad_raw)
+rows_uldm  = mode_rows_for(urad_uldm)
+rows_noise = mode_rows_for(urad_noise_marker)
+
+print(f"\nScaffold vibration modes (folded to [0, {f_N:g}] Hz baseband):")
+for m, row in zip(modes, rows_raw):
+    status = 'genuine (< f_N)' if m['f'] <= f_N else 'folded/aliased'
+    print(f"  f0={m['f']:>6.2f} Hz  ->  folded bin {row['f_bin']:>6.4f} Hz  "
+          f"peak={row['peak']:>10.4g} urad/rtHz  {status}")
+
+# ── Shared plotting helpers ──────────────────────────────────────────────────
+def plot_phase_panel(ax):
+    mask_100s = subsample_times <= 100
+    ax.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o', color='blue')
+    ax.set_xlabel('$t$ [s]', fontsize=16)
+    ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=16)
+
+def mark_uldm(ax, y_min, f_bin, peak):
+    ax.vlines(f_bin, y_min, peak, color=COLORS['uldm'], lw=0.8, zorder=4)
+    ax.scatter([f_bin], [peak], color=COLORS['uldm'], zorder=5, s=40, marker='D')
+    ax.annotate(r'$f_\varphi$', (f_bin, peak), textcoords='offset points',
+                xytext=(6, 6), fontsize=9, color=COLORS['uldm'])
+
+def mark_modes(ax, y_min, rows):
+    for row in rows:
+        ax.vlines(row['f_bin'], y_min, row['peak'], color=COLORS['fundamental'], lw=0.8, zorder=4)
+        ax.scatter([row['f_bin']], [row['peak']], color=COLORS['fundamental'], zorder=5, s=30)
+        label = f"{row['f0']:g} Hz" + (' (folded)' if row['folded'] else '')
+        ax.annotate(label, (row['f_bin'], row['peak']), textcoords='offset points',
+                    xytext=(4, 6), fontsize=6, color=COLORS['fundamental'], rotation=90)
+
+def finish_periodogram_axes(ax, y_min, y_max):
+    ax.set_yscale('log')
+    ax.set_xlim(0, f_N)
+    ax.set_ylim(y_min, y_max)
+    ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
+    ax.text(f_N, y_max * 0.5, r'  $f_N$', fontsize=8, ha='left', va='center')
+    ax.set_xlabel('$f$ [Hz]', fontsize=16)
+    ax.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=16)
+
+# ── Figure 1: just scaffold ──────────────────────────────────────────────────
+fig1, (ax1a, ax1b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
+plot_phase_panel(ax1a)
+
+y_min1 = 0.1 * urad_raw[urad_raw > 0].min()
+y_max1 = 3 * urad_raw.max()
+ax1b.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2)
+mark_modes(ax1b, y_min1, rows_raw)
+finish_periodogram_axes(ax1b, y_min1, y_max1)
+fig1.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff.png', dpi=200)
+
+# ── Figure 2: scaffold + ULDM ────────────────────────────────────────────────
+fig2, (ax2a, ax2b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
+plot_phase_panel(ax2a)
+
+y_min2 = 0.1 * min(urad_uldm[urad_uldm > 0].min(), f_phi_peak_uldm)
+y_max2 = 3 * max(urad_uldm.max(), f_phi_peak_uldm)
+ax2b.plot(f_k, urad_uldm, color='#555555', lw=0.6, zorder=2, label='scaffold-induced $\\Delta\\Phi$')
+mark_uldm(ax2b, y_min2, f_phi_bin, f_phi_peak_uldm)
+mark_modes(ax2b, y_min2, rows_uldm)
+finish_periodogram_axes(ax2b, y_min2, y_max2)
+ax2b.legend(handles=[
+    plt.Line2D([], [], color='#555555', lw=1.5, label='scaffold-induced $\\Delta\\Phi$'),
+    plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
+    plt.Line2D([], [], color=COLORS['fundamental'], marker='o', ls='', label='scaffold vibration modes'),
+], fontsize=8, loc='upper right', frameon=False)
+fig2.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm.png', dpi=200)
+
+# ── Figure 3: scaffold + ULDM + noise floors ─────────────────────────────────
+fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
+plot_phase_panel(ax3a)
+
+y_min3 = 0.1 * min(lvl['asd'] for lvl in NOISE_LEVELS) * 1e6
+y_max3 = 3 * max(urad_noise['baseline'].max(), f_phi_peak_noise)
+for lvl in NOISE_LEVELS:
+    ax3b.plot(f_k, urad_noise[lvl['key']], color=lvl['color'], lw=lvl['lw'], zorder=lvl['zorder'])
+mark_uldm(ax3b, y_min3, f_phi_bin, f_phi_peak_noise)
+mark_modes(ax3b, y_min3, rows_noise)
+finish_periodogram_axes(ax3b, y_min3, y_max3)
+ax3b.legend(handles=[
+    plt.Line2D([], [], color=lvl['color'], lw=2.5, label=lvl['label']) for lvl in NOISE_LEVELS
+] + [
+    plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
+    plt.Line2D([], [], color=COLORS['fundamental'], marker='o', ls='', label='scaffold vibration modes'),
+], fontsize=8, loc='upper right', frameon=False)
+fig3.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm_noise.png', dpi=200)
 
 plt.show()
 print("\nDone.")
