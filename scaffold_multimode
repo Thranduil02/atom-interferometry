@@ -166,7 +166,7 @@ def upper_arm(z_0, u, t_start, t_end, delta_t, acc, floor, total_time=2.0):
     return t, path
 
 # ── Build trajectories ────────────────────────────────────────────────────────
-T_total  = 1e6   # total simulated observation time [s]
+T_total  = 3e6   # total simulated observation time [s]
 T_cycle  = 2.0          # duration of one launch/measurement cycle [s] (also the
                         # subsampling spacing used below, and lower_arm/upper_arm's
                         # default total_time)
@@ -297,18 +297,15 @@ _,   S_k_uldm = periodogram(phase_diff_uldm)
 urad_raw      = np.sqrt(S_k_raw) * 1e6
 urad_uldm     = np.sqrt(S_k_uldm) * 1e6
 
-# ── Noise floors (house style from fig2_circle_summary.py, shades of green) ────
+# ── Noise floor (house style from fig2_circle_summary.py, stretch level only) ──
 NOISE_LEVELS = [
-    dict(key='baseline', asd=1e-4, label='baseline (1e-4)', color='#a8d9a8', lw=0.4, zorder=2),
-    dict(key='stretch',  asd=1e-5, label='stretch (1e-5)',  color='#1b5e20', lw=0.5, zorder=3),
+    dict(key='stretch', asd=1e-5, label='stretch (1e-5)', color='#1b5e20', lw=0.5, zorder=3),
 ]
 urad_noise = {}
 for lvl in NOISE_LEVELS:
     _, S = periodogram(add_noise(phase_diff_uldm, lvl['asd']))
     urad_noise[lvl['key']] = np.sqrt(S) * 1e6
-# markers in the third figure are read off the noisier "baseline" trace,
-# same convention as fig2_circle_summary.py
-urad_noise_marker = urad_noise['baseline']
+urad_noise_marker = urad_noise['stretch']
 
 # ── colour-by-physical-origin palette (verbatim from fig2_final.py) ─────────────
 COLORS = dict(
@@ -352,11 +349,17 @@ def mark_uldm(ax, y_min, f_bin, peak):
                 xytext=(6, 6), fontsize=9, color=COLORS['uldm'])
 
 def mark_modes(ax, y_min, rows):
+    # several modes can alias onto the same folded bin -- group them so a
+    # shared circle gets one combined label instead of overlapping duplicates
+    groups = {}
     for row in rows:
-        ax.vlines(row['f_bin'], y_min, row['peak'], color=COLORS['fundamental'], lw=0.8, zorder=4)
-        ax.scatter([row['f_bin']], [row['peak']], color=COLORS['fundamental'], zorder=5, s=30)
-        label = f"{row['f0']:g} Hz" + (' (folded)' if row['folded'] else '')
-        ax.annotate(label, (row['f_bin'], row['peak']), textcoords='offset points',
+        groups.setdefault(row['f_bin'], []).append(row)
+    for f_bin, group in groups.items():
+        peak = group[0]['peak']
+        ax.vlines(f_bin, y_min, peak, color=COLORS['fundamental'], lw=0.8, zorder=4)
+        ax.scatter([f_bin], [peak], color=COLORS['fundamental'], zorder=5, s=30)
+        label = ', '.join(f"{row['f0']:g}" + (' (folded)' if row['folded'] else '') for row in group) + ' Hz'
+        ax.annotate(label, (f_bin, peak), textcoords='offset points',
                     xytext=(4, 6), fontsize=6, color=COLORS['fundamental'], rotation=90)
 
 def finish_periodogram_axes(ax, y_min, y_max):
@@ -374,9 +377,12 @@ plot_phase_panel(ax1a)
 
 y_min1 = 0.1 * urad_raw[urad_raw > 0].min()
 y_max1 = 3 * urad_raw.max()
-ax1b.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2)
+ax1b.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2, label='scaffold')
 mark_modes(ax1b, y_min1, rows_raw)
 finish_periodogram_axes(ax1b, y_min1, y_max1)
+ax1b.legend(handles=[
+    plt.Line2D([], [], color='firebrick', lw=1.5, label='scaffold'),
+], fontsize=8, loc='upper right', frameon=False)
 fig1.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff.png', dpi=200)
 
 # ── Figure 2: scaffold + ULDM ────────────────────────────────────────────────
@@ -385,14 +391,13 @@ plot_phase_panel(ax2a)
 
 y_min2 = 0.1 * min(urad_uldm[urad_uldm > 0].min(), f_phi_peak_uldm)
 y_max2 = 3 * max(urad_uldm.max(), f_phi_peak_uldm)
-ax2b.plot(f_k, urad_uldm, color='#555555', lw=0.6, zorder=2, label='scaffold-induced $\\Delta\\Phi$')
+ax2b.plot(f_k, urad_uldm, color='#555555', lw=0.6, zorder=2, label='scaffold + ULDM')
 mark_uldm(ax2b, y_min2, f_phi_bin, f_phi_peak_uldm)
 mark_modes(ax2b, y_min2, rows_uldm)
 finish_periodogram_axes(ax2b, y_min2, y_max2)
 ax2b.legend(handles=[
-    plt.Line2D([], [], color='#555555', lw=1.5, label='scaffold-induced $\\Delta\\Phi$'),
+    plt.Line2D([], [], color='#555555', lw=1.5, label='scaffold + ULDM'),
     plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
-    plt.Line2D([], [], color=COLORS['fundamental'], marker='o', ls='', label='scaffold vibration modes'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig2.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm.png', dpi=200)
 
@@ -401,7 +406,7 @@ fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
 plot_phase_panel(ax3a)
 
 y_min3 = 0.1 * min(lvl['asd'] for lvl in NOISE_LEVELS) * 1e6
-y_max3 = 3 * max(urad_noise['baseline'].max(), f_phi_peak_noise)
+y_max3 = 3 * max(urad_noise['stretch'].max(), f_phi_peak_noise)
 for lvl in NOISE_LEVELS:
     ax3b.plot(f_k, urad_noise[lvl['key']], color=lvl['color'], lw=lvl['lw'], zorder=lvl['zorder'])
 mark_uldm(ax3b, y_min3, f_phi_bin, f_phi_peak_noise)
@@ -411,7 +416,6 @@ ax3b.legend(handles=[
     plt.Line2D([], [], color=lvl['color'], lw=2.5, label=lvl['label']) for lvl in NOISE_LEVELS
 ] + [
     plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
-    plt.Line2D([], [], color=COLORS['fundamental'], marker='o', ls='', label='scaffold vibration modes'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig3.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm_noise.png', dpi=200)
 
