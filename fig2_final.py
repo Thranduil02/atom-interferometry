@@ -65,7 +65,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 1e6   # total observation time [s]
+T_total  = 3e7   # total observation time [s]
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
@@ -78,7 +78,7 @@ NOISE_LEVELS = [
 
 # ── geometry parameters specific to this figure ─────────────────────────────────
 F_SLOW    = 0.02    # panel (a): sub-Nyquist, shows the unfolded nonlinearity comb
-F_CIRC    = 0.131   # panels (b)/(c)/(d): shared super-Nyquist fundamental (folds)
+F_CIRC    = 0.092   # panels (b)/(c)/(d): shared super-Nyquist fundamental (folds)
 THETA_DEG = np.arange(0.0, 360.0 + 1e-9, 5.0)    # panel (d) sweep, every 5 deg, full turn
 
 # ── colour-by-physical-origin palette (verbatim) ────────────────────────────────
@@ -300,25 +300,31 @@ if __name__ == "__main__":
     y_max = max(y_max, 3 * max(p for _, p in f_phi_bins.values()))
     y_min = 0.1 * NOISE_LEVELS[0]['asd'] * 1e6
 
+    PANEL_TITLES = {
+        'a': '1D oscillator and ULDM',
+        'b': 'Post-Nyquist folding',
+        'c': '2D horizontal circle',
+        'd': 'Tilt angle sweep',
+    }
+
     for ax in (ax_a, ax_b, ax_c):
         ax.set_yscale('log')
         ax.set_ylim(y_min, y_max)
         ax.set_xlim(0, f_N)
-        ax.tick_params(labelsize=7)
+        ax.tick_params(labelsize=11)
         ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
-    ax_b.set_ylabel(r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=7)
+    ax_b.set_ylabel(r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=12)
     for letter, ax in zip('abc', (ax_a, ax_b, ax_c)):
-        ax.text(0.99, 0.93, f'({letter})', transform=ax.transAxes, ha='right',
-                va='top', fontsize=7, fontweight='bold')
-    ax_c.set_xlabel('$f$ [Hz]', fontsize=8)
-    ax_a.text(f_N, y_max*0.5, r'  $f_N$', fontsize=6, ha='left', va='center')
+        ax.set_title(PANEL_TITLES[letter], fontsize=11, fontweight='bold')
+    ax_c.set_xlabel('$f$ [Hz]', fontsize=12)
+    ax_a.text(f_N, y_max*0.5, r'  $f_N$', fontsize=9, ha='left', va='center')
 
     def mark_uldm(ax, letter, xytext=(6, 6)):
         f_bin, peak = f_phi_bins[letter]
         ax.vlines(f_bin, y_min, peak, color=COLORS['uldm'], lw=0.6, zorder=4)
         ax.scatter([f_bin], [peak], color=COLORS['uldm'], zorder=5, s=8, marker='D')
         ax.annotate(r'$f_\varphi$', (f_bin, peak), textcoords='offset points',
-                    xytext=xytext, fontsize=5, color=COLORS['uldm'])
+                    xytext=xytext, fontsize=8, color=COLORS['uldm'])
 
     def mark_harmonics(ax, letter, folded, offsets, n_show=4):
         f_bin_phi, _ = f_phi_bins[letter]
@@ -333,7 +339,7 @@ if __name__ == "__main__":
             base = r'$f_0$' if k == 1 else rf'${k}f_0$'
             label = base + ' (folded)' if folded and f_true > f_N else base
             ax.annotate(label, (f_bin, peak), textcoords='offset points',
-                        xytext=offsets.get(k, (4, 6)), fontsize=5, color=col)
+                        xytext=offsets.get(k, (4, 6)), fontsize=8, color=col)
 
     def plot_noise_stack(ax, letter):
         for lvl in NOISE_LEVELS:
@@ -346,7 +352,7 @@ if __name__ == "__main__":
     mark_uldm(ax_a, 'a', xytext=(6, -6))
     ax_a.legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
                                      label=lvl['label']) for lvl in NOISE_LEVELS],
-                fontsize=5, loc='upper left', frameon=False)
+                fontsize=8, loc='upper left', frameon=False)
 
     plot_noise_stack(ax_b, 'b')
     mark_harmonics(ax_b, 'b', folded=True,
@@ -363,15 +369,14 @@ if __name__ == "__main__":
     ax_d.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
     ax_d.set_xlim(0, 360)
     ax_d.set_xticks(np.arange(0, 361, 45))
-    ax_d.set_xlabel('circle inclination $\\theta$ [deg] (0=horiz., 90=vert.)', fontsize=7)
-    ax_d.set_ylabel(r'$\sqrt{S_{2f_0}}\,/\,\sqrt{S_{f_0}}$', fontsize=7)
+    ax_d.set_xlabel('circle inclination $\\theta$ [deg] (0=horiz., 90=vert.)', fontsize=12)
+    ax_d.set_ylabel(r'$\sqrt{S_{2f_0}}\,/\,\sqrt{S_{f_0}}$', fontsize=12)
     ax_d.set_ylim(0, 1.3 * max(line_vals))
-    ax_d.tick_params(labelsize=7)
+    ax_d.tick_params(labelsize=11)
+    ax_d.set_title(PANEL_TITLES['d'], fontsize=11, fontweight='bold')
     ax_d.axvline(90, color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d.axvline(270, color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d.axhline(ratio_2f0_f0[90.0], color='k', ls=':', lw=0.4, alpha=0.5)
-    ax_d.text(0.99, 0.93, '(d)', transform=ax_d.transAxes, ha='right',
-              va='top', fontsize=7, fontweight='bold')
 
     # ── figure 2: horizontal vs. vertical circle comb, overlaid ─────────────────
     # one shared noise realization for both traces, so they sit on the same
