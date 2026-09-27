@@ -290,7 +290,7 @@ if __name__ == "__main__":
 
     # ── plot: 3 stacked periodogram panels (a,b,c) + 1 line graph (d) ───────────
     fig = plt.figure(figsize=(4.5, 15), dpi=200)
-    gs  = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.1], hspace=0.4)
+    gs  = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.1], hspace=0.55)
     ax_a = fig.add_subplot(gs[0])
     ax_b = fig.add_subplot(gs[1], sharex=ax_a)
     ax_c = fig.add_subplot(gs[2], sharex=ax_a)
@@ -315,7 +315,7 @@ if __name__ == "__main__":
         ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
     ax_b.set_ylabel(r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=12)
     for letter, ax in zip('abc', (ax_a, ax_b, ax_c)):
-        ax.set_title(PANEL_TITLES[letter], fontsize=11, fontweight='bold')
+        ax.set_title(PANEL_TITLES[letter], fontsize=9, fontweight='bold')
     ax_c.set_xlabel('$f$ [Hz]', fontsize=12)
     ax_a.text(f_N, y_max*0.5, r'  $f_N$', fontsize=9, ha='left', va='center')
 
@@ -373,7 +373,7 @@ if __name__ == "__main__":
     ax_d.set_ylabel(r'$\sqrt{S_{2f_0}}\,/\,\sqrt{S_{f_0}}$', fontsize=12)
     ax_d.set_ylim(0, 1.3 * max(line_vals))
     ax_d.tick_params(labelsize=11)
-    ax_d.set_title(PANEL_TITLES['d'], fontsize=11, fontweight='bold')
+    ax_d.set_title(PANEL_TITLES['d'], fontsize=9, fontweight='bold', pad=10)
     ax_d.axvline(90, color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d.axvline(270, color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d.axhline(ratio_2f0_f0[90.0], color='k', ls=':', lw=0.4, alpha=0.5)
