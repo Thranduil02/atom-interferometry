@@ -289,8 +289,9 @@ if __name__ == "__main__":
               f"2f0={peak_2f0_theta[th]:>12.4g}   ratio={ratio_2f0_f0[th]:.4f}")
 
     # ── plot: 3 stacked periodogram panels (a,b,c) + 1 line graph (d) ───────────
-    fig = plt.figure(figsize=(4.5, 15), dpi=200)
-    gs  = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.1], hspace=0.55)
+    fig = plt.figure(figsize=(6.5, 15), dpi=200)
+    gs  = fig.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.1], hspace=0.55,
+                            left=0.16, right=0.95)
     ax_a = fig.add_subplot(gs[0])
     ax_b = fig.add_subplot(gs[1], sharex=ax_a)
     ax_c = fig.add_subplot(gs[2], sharex=ax_a)
