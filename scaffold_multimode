@@ -336,40 +336,39 @@ for m, row in zip(modes, rows_raw):
           f"peak={row['peak']:>10.4g} urad/rtHz  {status}")
 
 # ── Shared plotting helpers ──────────────────────────────────────────────────
+AXIS_LABEL_FONTSIZE = 20
+
 def plot_phase_panel(ax):
     mask_100s = subsample_times <= 100
     ax.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o', color='blue')
-    ax.set_xlabel('$t$ [s]', fontsize=16)
-    ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=16)
+    ax.set_xlabel('$t$ [s]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=AXIS_LABEL_FONTSIZE)
 
 def mark_uldm(ax, y_min, f_bin, peak):
-    ax.vlines(f_bin, y_min, peak, color=COLORS['uldm'], lw=0.8, zorder=4)
+    # bold, unlabeled marker -- thicker than the noise/periodogram trace it sits on
+    ax.vlines(f_bin, y_min, peak, color=COLORS['uldm'], lw=2.5, zorder=4)
     ax.scatter([f_bin], [peak], color=COLORS['uldm'], zorder=5, s=40, marker='D')
-    ax.annotate(r'$f_\varphi$', (f_bin, peak), textcoords='offset points',
-                xytext=(6, 6), fontsize=9, color=COLORS['uldm'])
 
 def mark_modes(ax, y_min, rows):
-    # several modes can alias onto the same folded bin -- group them so a
-    # shared circle gets one combined label instead of overlapping duplicates
-    groups = {}
+    # one bold, unlabeled marker per mode -- plotted individually (not merged
+    # by folded bin) so every mode is represented even when several alias
+    # onto the same, or a nearly identical, folded frequency
     for row in rows:
-        groups.setdefault(row['f_bin'], []).append(row)
-    for f_bin, group in groups.items():
-        peak = group[0]['peak']
-        ax.vlines(f_bin, y_min, peak, color=COLORS['fundamental'], lw=0.8, zorder=4)
-        ax.scatter([f_bin], [peak], color=COLORS['fundamental'], zorder=5, s=30)
-        label = ', '.join(f"{row['f0']:g}" + (' (folded)' if row['folded'] else '') for row in group) + ' Hz'
-        ax.annotate(label, (f_bin, peak), textcoords='offset points',
-                    xytext=(4, 6), fontsize=6, color=COLORS['fundamental'], rotation=90)
+        ax.vlines(row['f_bin'], y_min, row['peak'], color=COLORS['fundamental'],
+                   lw=2.5, zorder=4)
+        ax.scatter([row['f_bin']], [row['peak']], color=COLORS['fundamental'],
+                   zorder=5, s=30)
 
-def finish_periodogram_axes(ax, y_min, y_max):
-    ax.set_yscale('log')
+def finish_periodogram_axes(ax, y_min, y_max, log=True):
+    if log:
+        ax.set_yscale('log')
     ax.set_xlim(0, f_N)
     ax.set_ylim(y_min, y_max)
     ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
-    ax.text(f_N, y_max * 0.5, r'  $f_N$', fontsize=8, ha='left', va='center')
-    ax.set_xlabel('$f$ [Hz]', fontsize=16)
-    ax.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=16)
+    ax.text(f_N, y_min + 0.5 * (y_max - y_min) if not log else y_max * 0.5,
+            r'  $f_N$', fontsize=8, ha='left', va='center')
+    ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=AXIS_LABEL_FONTSIZE)
 
 # ── Figure 1: just scaffold ──────────────────────────────────────────────────
 fig1, (ax1a, ax1b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
@@ -418,6 +417,17 @@ ax3b.legend(handles=[
     plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig3.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm_noise.png', dpi=200)
+
+# ── Figure 4: plain scaffold periodogram, linear y-axis (no log) ────────────
+fig4, ax4 = plt.subplots(figsize=(10, 7.5), tight_layout=True)
+y_max4 = 1.1 * urad_raw.max()
+ax4.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2, label='scaffold')
+mark_modes(ax4, 0.0, rows_raw)
+finish_periodogram_axes(ax4, 0.0, y_max4, log=False)
+ax4.legend(handles=[
+    plt.Line2D([], [], color='firebrick', lw=1.5, label='scaffold'),
+], fontsize=8, loc='upper right', frameon=False)
+fig4.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_linear.png', dpi=200)
 
 plt.show()
 print("\nDone.")

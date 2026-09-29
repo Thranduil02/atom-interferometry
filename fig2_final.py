@@ -78,7 +78,7 @@ delta_r = 70.0   # gradiometer baseline (matches 100m_oscillators)
 
 # single noise floor: baseline, 1e-5 rad/sqrt(Hz), plotted light green
 NOISE_LEVELS = [
-    dict(key='baseline', asd=1e-5, label='baseline (1e-5)', color='#a3d9a3', lw=0.35, zorder=3),
+    dict(key='baseline', asd=1e-5, label='shot noise (1e-5)', color='#a3d9a3', lw=0.35, zorder=3),
 ]
 
 # ── geometry parameters specific to this figure ─────────────────────────────────
