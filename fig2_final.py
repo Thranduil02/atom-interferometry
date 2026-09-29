@@ -34,6 +34,11 @@ F_CIRC, on the same log-scale periodogram axes (no ULDM tone plotted here),
 colour-coded so the two geometries' harmonic content can be compared
 directly.
 
+A third figure repeats the figure-1 layout (a, b, c, d) but folds the
+horizontal/vertical comparison from figure 2 into panel (c) itself -- both
+combs, plus the ULDM tone, on one set of axes -- instead of splitting it
+into a separate plot.
+
 Only ONE noise floor is used throughout (baseline, 1e-5 rad/sqrt(Hz)),
 plotted in a light green rather than the sand/tan house colour used
 elsewhere.
@@ -423,6 +428,99 @@ if __name__ == "__main__":
                   fontsize=9)
     fig2.tight_layout()
 
+    # ── figure 3: same 4-panel layout as figure 1, but panel (c) overlays the
+    # horizontal and vertical circle combs (as in figure 2) instead of showing
+    # only the horizontal circle. Both traces include the ULDM tone and share
+    # one noise realization, so they sit on equal footing.
+    raw_horiz_c3 = phases_c + uldm + noise_vec
+    raw_vert_c3  = phases_c_vert + uldm + noise_vec
+    _, S_horiz_c3 = periodogram(raw_horiz_c3)
+    _, S_vert_c3  = periodogram(raw_vert_c3)
+    urad_horiz_c3 = np.sqrt(S_horiz_c3) * 1e6
+    urad_vert_c3  = np.sqrt(S_vert_c3) * 1e6
+
+    rows_horiz_c3 = harmonic_table('fig3 (c), horizontal', src_c, f_k, urad_horiz_c3)
+    rows_vert_c3  = harmonic_table('fig3 (c), vertical', src_c_vert, f_k, urad_vert_c3)
+    f_phi_bin_c3  = peak_at(f_k, urad_horiz_c3, f_phi)
+
+    COLOR_VERT_C3 = '#e07b00'   # orange -- distinct from red (horizontal) and
+                                 # blue (ULDM marker, which now also appears here)
+
+    fig3 = plt.figure(figsize=(6.5, 15), dpi=200)
+    gs3  = fig3.add_gridspec(4, 1, height_ratios=[1, 1, 1, 1.1], hspace=0.55,
+                              left=0.16, right=0.95)
+    ax_a3 = fig3.add_subplot(gs3[0])
+    ax_b3 = fig3.add_subplot(gs3[1], sharex=ax_a3)
+    ax_c3 = fig3.add_subplot(gs3[2], sharex=ax_a3)
+    ax_d3 = fig3.add_subplot(gs3[3])
+
+    for ax in (ax_a3, ax_b3, ax_c3):
+        ax.set_yscale('log')
+        ax.set_ylim(y_min, y_max)
+        ax.set_xlim(0, f_N)
+        ax.tick_params(labelsize=11)
+        ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
+    ax_b3.set_ylabel(r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]', fontsize=12)
+    ax_a3.text(f_N, y_max*0.5, r'  $f_N$', fontsize=9, ha='left', va='center')
+
+    PANEL_TITLES_FIG3 = dict(PANEL_TITLES, c='2D circle: horizontal vs. vertical')
+    for letter, ax in zip('abc', (ax_a3, ax_b3, ax_c3)):
+        ax.set_title(PANEL_TITLES_FIG3[letter], fontsize=9, fontweight='bold')
+    ax_c3.set_xlabel('$f$ [Hz]', fontsize=12)
+
+    plot_noise_stack(ax_a3, 'a')
+    mark_harmonics(ax_a3, 'a', folded=False,
+                   offsets={1: (4, -8), 2: (4, 6), 3: (4, 6), 4: (5, -8)})
+    mark_uldm(ax_a3, 'a', xytext=(6, -6))
+    ax_a3.legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
+                                      label=lvl['label']) for lvl in NOISE_LEVELS],
+                 fontsize=8, loc='upper left', frameon=False)
+
+    plot_noise_stack(ax_b3, 'b')
+    mark_harmonics(ax_b3, 'b', folded=True,
+                   offsets={1: (4, -2), 2: (-14, 6), 3: (0, 6), 4: (4, -8)})
+    mark_uldm(ax_b3, 'b', xytext=(6, -6))
+
+    # panel (c): horizontal + vertical circle combs overlaid
+    ax_c3.plot(f_k, urad_horiz_c3, color=COLOR_HORIZ, lw=0.5, alpha=0.6,
+               label='horizontal (incline=0°)')
+    ax_c3.plot(f_k, urad_vert_c3, color=COLOR_VERT_C3, lw=0.5, alpha=0.6,
+               label='vertical (incline=90°)')
+    for rows_geom, col in ((rows_horiz_c3, COLOR_HORIZ), (rows_vert_c3, COLOR_VERT_C3)):
+        for k, f_true, f_fold, peak, f_bin in rows_geom[:4]:
+            if abs(f_fold - f_phi_bin_c3[0]) < 2 * (f_k[1] - f_k[0]):
+                continue
+            ax_c3.vlines(f_bin, y_min, peak, color=col, lw=0.6, zorder=4)
+            ax_c3.scatter([f_bin], [peak], color=col, zorder=5, s=7)
+            base = r'$f_0$' if k == 1 else rf'${k}f_0$'
+            label = base + ' (folded)' if f_true > f_N else base
+            ax_c3.annotate(label, (f_bin, peak), textcoords='offset points',
+                           xytext=(4, 6), fontsize=6, color=col)
+    ax_c3.vlines(f_phi_bin_c3[0], y_min, f_phi_bin_c3[1], color=COLORS['uldm'],
+                 lw=0.6, zorder=4)
+    ax_c3.scatter([f_phi_bin_c3[0]], [f_phi_bin_c3[1]], color=COLORS['uldm'],
+                  zorder=5, s=8, marker='D')
+    ax_c3.annotate(r'$f_\varphi$', f_phi_bin_c3, textcoords='offset points',
+                   xytext=(6, -6), fontsize=8, color=COLORS['uldm'])
+    ax_c3.legend(handles=[
+        plt.Line2D([], [], color=COLOR_HORIZ, lw=1.5, label='horizontal (incline=0°)'),
+        plt.Line2D([], [], color=COLOR_VERT_C3, lw=1.5, label='vertical (incline=90°)'),
+        plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
+    ], fontsize=7, loc='upper left', frameon=False)
+
+    # panel (d): identical tilt-angle sweep as figure 1
+    ax_d3.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
+    ax_d3.set_xlim(0, 360)
+    ax_d3.set_xticks(np.arange(0, 361, 45))
+    ax_d3.set_xlabel('circle inclination $\\theta$ [deg] (0=horiz., 90=vert.)', fontsize=12)
+    ax_d3.set_ylabel(r'$\sqrt{S_{2f_0}}\,/\,\sqrt{S_{f_0}}$', fontsize=12)
+    ax_d3.set_ylim(0, 1.3 * max(line_vals))
+    ax_d3.tick_params(labelsize=11)
+    ax_d3.set_title(PANEL_TITLES['d'], fontsize=9, fontweight='bold', pad=10)
+    ax_d3.axvline(90, color='k', ls=':', lw=0.4, alpha=0.5)
+    ax_d3.axvline(270, color='k', ls=':', lw=0.4, alpha=0.5)
+    ax_d3.axhline(ratio_2f0_f0[90.0], color='k', ls=':', lw=0.4, alpha=0.5)
+
     print("\n" + "=" * 78)
     print("Suggested caption:")
     print(f"  dt = T_cyc = {T_cyc:g} s, N_cycles = {N_cycles:,}, T_obs = {T_total:.3g} s, "
@@ -435,6 +533,8 @@ if __name__ == "__main__":
     print(f"  (c) horizontal circle + ULDM, f0 = {F_CIRC} Hz (super-Nyquist: comb folds).")
     print(f"  (d) 2f0/f0 folded-peak ratio for a circle inclined at 0-360 deg (every 10 deg) "
           f"out of the horizontal.")
+    print(f"  Figure 3: as figure 1, but panel (c) overlays the horizontal and vertical "
+          f"circle combs (+ ULDM) instead of showing the horizontal circle alone.")
     print("=" * 78)
 
     plt.show()
