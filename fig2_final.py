@@ -512,9 +512,9 @@ if __name__ == "__main__":
     ax_c3.annotate(r'$f_\varphi$', f_phi_bin_c3, textcoords='offset points',
                    xytext=(6, -6), fontsize=8, color=COLORS['uldm'])
     ax_c3.legend(handles=[
-        plt.Line2D([], [], color=COLOR_HORIZ, lw=1.5, label='horizontal (incline=0°)'),
-        plt.Line2D([], [], color=COLOR_VERT_C3, lw=1.5, label='vertical (incline=90°)'),
-    ], fontsize=8, loc='upper right', frameon=False)
+        plt.Line2D([], [], color=COLOR_HORIZ, lw=1.5, label='horizontal'),
+        plt.Line2D([], [], color=COLOR_VERT_C3, lw=1.5, label='vertical'),
+    ], fontsize=6, loc='upper right', frameon=False)
 
     # panel (d): identical tilt-angle sweep as figure 1
     ax_d3.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
