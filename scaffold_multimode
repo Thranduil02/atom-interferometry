@@ -340,7 +340,7 @@ AXIS_LABEL_FONTSIZE = 20
 
 def plot_phase_panel(ax):
     mask_100s = subsample_times <= 100
-    ax.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o', color='blue')
+    ax.plot(subsample_times[mask_100s], pd_ac[mask_100s] * 1e6, 'o', color='red')
     ax.set_xlabel('$t$ [s]', fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=AXIS_LABEL_FONTSIZE)
 
