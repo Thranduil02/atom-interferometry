@@ -176,11 +176,13 @@ if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
-AXIS_LABEL_FONTSIZE = 15
-TITLE_FONTSIZE      = 14
-TICK_LABELSIZE      = 13
+AXIS_LABEL_FONTSIZE = 18
+TITLE_FONTSIZE      = 16
+TICK_LABELSIZE      = 15
+Y_LABEL = r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]'
+X_LABEL = '$f$ [Hz]'
 
-fig, axes = plt.subplots(3, 1, figsize=(10, 13))
+fig, axes = plt.subplots(3, 1, figsize=(10, 13), sharex=True)
 
 panels = [
     (axes[0], f_grid_1, S_1, rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 1{{,}}000$'),
@@ -192,15 +194,16 @@ for i, (ax, f_grid, S, title) in enumerate(panels):
     ax.plot(f_grid, np.sqrt(S), color='firebrick', lw=1.0)
     if i < 2:
         ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
-    ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_title(title, fontsize=TITLE_FONTSIZE)
+    ax.set_title(title, fontsize=TITLE_FONTSIZE, fontweight='bold')
     ax.tick_params(labelsize=TICK_LABELSIZE)
+
+axes[1].set_ylabel(Y_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
+axes[-1].set_xlabel(X_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
 
 fig.tight_layout()
 
 # ── 5-panel jitter build-up: no jitter -> small -> large -> large/high-N -> alternating ─
-fig2, axes2 = plt.subplots(5, 1, figsize=(10, 20))
+fig2, axes2 = plt.subplots(5, 1, figsize=(10, 20), sharex=True)
 
 panels2 = [
     (axes2[0], f_grid_0,  S_0,  r'No jitter, $N = 1{,}000$'),
@@ -216,10 +219,11 @@ for i, (ax, f_grid, S, title) in enumerate(panels2):
         ax.axvspan(ALIAS_LO_01, ALIAS_HI_01, color='gold', alpha=0.3, lw=0, zorder=0)
     elif i in (2, 3):
         ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
-    ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=AXIS_LABEL_FONTSIZE)
-    ax.set_title(title, fontsize=TITLE_FONTSIZE)
+    ax.set_title(title, fontsize=TITLE_FONTSIZE, fontweight='bold')
     ax.tick_params(labelsize=TICK_LABELSIZE)
+
+axes2[2].set_ylabel(Y_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
+axes2[-1].set_xlabel(X_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
 
 fig2.tight_layout()
 
