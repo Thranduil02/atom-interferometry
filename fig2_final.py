@@ -358,7 +358,7 @@ if __name__ == "__main__":
     mark_uldm(ax_a, 'a', xytext=(6, -6))
     ax_a.legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
                                      label=lvl['label']) for lvl in NOISE_LEVELS],
-                fontsize=8, loc='upper left', frameon=False)
+                fontsize=8, loc='upper right', frameon=False)
 
     plot_noise_stack(ax_b, 'b')
     mark_harmonics(ax_b, 'b', folded=True,
@@ -474,28 +474,37 @@ if __name__ == "__main__":
     mark_uldm(ax_a3, 'a', xytext=(6, -6))
     ax_a3.legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
                                       label=lvl['label']) for lvl in NOISE_LEVELS],
-                 fontsize=8, loc='upper left', frameon=False)
+                 fontsize=8, loc='upper right', frameon=False)
 
     plot_noise_stack(ax_b3, 'b')
     mark_harmonics(ax_b3, 'b', folded=True,
                    offsets={1: (4, -2), 2: (-14, 6), 3: (0, 6), 4: (4, -8)})
     mark_uldm(ax_b3, 'b', xytext=(6, -6))
 
-    # panel (c): horizontal + vertical circle combs overlaid
-    ax_c3.plot(f_k, urad_horiz_c3, color=COLOR_HORIZ, lw=0.5, alpha=0.6,
-               label='horizontal (incline=0°)')
-    ax_c3.plot(f_k, urad_vert_c3, color=COLOR_VERT_C3, lw=0.5, alpha=0.6,
-               label='vertical (incline=90°)')
-    for rows_geom, col in ((rows_horiz_c3, COLOR_HORIZ), (rows_vert_c3, COLOR_VERT_C3)):
-        for k, f_true, f_fold, peak, f_bin in rows_geom[:4]:
-            if abs(f_fold - f_phi_bin_c3[0]) < 2 * (f_k[1] - f_k[0]):
-                continue
-            ax_c3.vlines(f_bin, y_min, peak, color=col, lw=0.6, zorder=4)
-            ax_c3.scatter([f_bin], [peak], color=col, zorder=5, s=7)
-            base = r'$f_0$' if k == 1 else rf'${k}f_0$'
-            label = base + ' (folded)' if f_true > f_N else base
-            ax_c3.annotate(label, (f_bin, peak), textcoords='offset points',
-                           xytext=(4, 6), fontsize=6, color=col)
+    # panel (c): ONE noisy periodogram (green, like panels a/b -- the horizontal
+    # and vertical traces share the same noise realization, so plotting both in
+    # full would just show the same noise floor twice) with the horizontal and
+    # vertical circle harmonics marked on top, colour-coded. Horizontal and
+    # vertical share the same fundamental (F_CIRC), so their harmonic orders
+    # land at the same frequencies -- label each order (f0, 2f0, ...) ONCE,
+    # at fontsize=8 to match panels (a)/(b), rather than once per geometry.
+    for lvl in NOISE_LEVELS:
+        ax_c3.plot(f_k, urad_horiz_c3, color=lvl['color'], lw=lvl['lw'], zorder=lvl['zorder'])
+    c3_offsets = {1: (4, -2), 2: (-14, 6), 3: (0, 6), 4: (4, -8)}
+    for k, ((_, f_true_h, f_fold_h, peak_h, f_bin_h),
+            (_, f_true_v, f_fold_v, peak_v, f_bin_v)) in enumerate(
+                zip(rows_horiz_c3[:4], rows_vert_c3[:4]), start=1):
+        if abs(f_fold_h - f_phi_bin_c3[0]) < 2 * (f_k[1] - f_k[0]):
+            continue
+        ax_c3.vlines(f_bin_h, y_min, peak_h, color=COLOR_HORIZ, lw=0.6, zorder=4)
+        ax_c3.scatter([f_bin_h], [peak_h], color=COLOR_HORIZ, zorder=5, s=7)
+        ax_c3.vlines(f_bin_v, y_min, peak_v, color=COLOR_VERT_C3, lw=0.6, zorder=4)
+        ax_c3.scatter([f_bin_v], [peak_v], color=COLOR_VERT_C3, zorder=5, s=7)
+        base = r'$f_0$' if k == 1 else rf'${k}f_0$'
+        label = base + ' (folded)' if f_true_h > f_N else base
+        top_bin, top_peak = (f_bin_h, peak_h) if peak_h >= peak_v else (f_bin_v, peak_v)
+        ax_c3.annotate(label, (top_bin, top_peak), textcoords='offset points',
+                       xytext=c3_offsets.get(k, (4, 6)), fontsize=8, color='black')
     ax_c3.vlines(f_phi_bin_c3[0], y_min, f_phi_bin_c3[1], color=COLORS['uldm'],
                  lw=0.6, zorder=4)
     ax_c3.scatter([f_phi_bin_c3[0]], [f_phi_bin_c3[1]], color=COLORS['uldm'],
@@ -505,8 +514,7 @@ if __name__ == "__main__":
     ax_c3.legend(handles=[
         plt.Line2D([], [], color=COLOR_HORIZ, lw=1.5, label='horizontal (incline=0°)'),
         plt.Line2D([], [], color=COLOR_VERT_C3, lw=1.5, label='vertical (incline=90°)'),
-        plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
-    ], fontsize=7, loc='upper left', frameon=False)
+    ], fontsize=8, loc='upper right', frameon=False)
 
     # panel (d): identical tilt-angle sweep as figure 1
     ax_d3.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
