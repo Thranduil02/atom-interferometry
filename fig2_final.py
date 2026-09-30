@@ -514,7 +514,7 @@ if __name__ == "__main__":
     ax_c3.legend(handles=[
         plt.Line2D([], [], color=COLOR_HORIZ, lw=1.5, label='horizontal'),
         plt.Line2D([], [], color=COLOR_VERT_C3, lw=1.5, label='vertical'),
-    ], fontsize=6, loc='upper right', frameon=False)
+    ], fontsize=6, loc='upper center', frameon=False)
 
     # panel (d): identical tilt-angle sweep as figure 1
     ax_d3.plot(THETA_DEG, line_vals, color=COLORS['fundamental'], lw=1.2)
