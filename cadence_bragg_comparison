@@ -124,7 +124,15 @@ def alternating_cadence(t_span, t_a=2.0, t_b=2.5):
 
 # ── shared frequency range for all three panels ────────────────────────────────
 F_LO, F_HI = 1e-3, 0.5
-ALIAS_LO, ALIAS_HI = 0.335, 0.488   # alias region highlighted on panels 1-2
+ALIAS_LO, ALIAS_HI = 0.335, 0.488   # alias region highlighted on panels 1-2 (delta = 0.3 s)
+
+# alias band for the delta = 0.1 s panel: same center (f_nom - f_sig), half-width
+# scaled down by the jitter ratio since the smearing is ~linear in delta
+_ALIAS_CENTER   = (ALIAS_LO + ALIAS_HI) / 2
+_ALIAS_HALF     = (ALIAS_HI - ALIAS_LO) / 2
+_JITTER_RATIO   = 0.1 / 0.3
+ALIAS_LO_01 = _ALIAS_CENTER - _ALIAS_HALF * _JITTER_RATIO
+ALIAS_HI_01 = _ALIAS_CENTER + _ALIAS_HALF * _JITTER_RATIO
 
 # ── panel 1 & 2: random jitter, delta = 0.3 s, N = 1,000 / 100,000 ─────────────
 delta = 0.3
@@ -204,7 +212,9 @@ panels2 = [
 
 for i, (ax, f_grid, S, title) in enumerate(panels2):
     ax.plot(f_grid, np.sqrt(S), color='firebrick', lw=1.0)
-    if i in (1, 2, 3):
+    if i == 1:
+        ax.axvspan(ALIAS_LO_01, ALIAS_HI_01, color='gold', alpha=0.3, lw=0, zorder=0)
+    elif i in (2, 3):
         ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
     ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=AXIS_LABEL_FONTSIZE)
