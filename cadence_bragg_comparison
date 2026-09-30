@@ -137,6 +137,17 @@ f_grid_2 = freq_grid(F_LO, F_HI, t_meas_2, f_centers=[f_sig], n_coarse=40000)
 S_1 = ls_psd(t_meas_1, phases_for(t_meas_1 - T_fly), f_grid_1)
 S_2 = ls_psd(t_meas_2, phases_for(t_meas_2 - T_fly), f_grid_2)
 
+# ── extra cadences for the 5-panel jitter-buildup figure ───────────────────────
+delta_lo = 0.1
+t_meas_0   = random_cadence(0.0,      1_000)   # no jitter (perfectly uniform)
+t_meas_lo  = random_cadence(delta_lo, 1_000)   # small jitter
+
+f_grid_0  = freq_grid(F_LO, F_HI, t_meas_0,  f_centers=[f_sig])
+f_grid_lo = freq_grid(F_LO, F_HI, t_meas_lo, f_centers=[f_sig])
+
+S_0  = ls_psd(t_meas_0,  phases_for(t_meas_0 - T_fly),  f_grid_0)
+S_lo = ls_psd(t_meas_lo, phases_for(t_meas_lo - T_fly), f_grid_lo)
+
 # ── panel 3: alternating cadence 2.0/2.5 s, total span 100,000 s ───────────────
 t_a, t_b = 2.0, 2.5
 T_super  = t_a + t_b   # period of the alternation
@@ -157,6 +168,10 @@ if warm_background:
     plt.rcParams['figure.facecolor'] = '#fdfcf3'
     plt.rcParams['axes.facecolor']   = '#fdfcf3'
 
+AXIS_LABEL_FONTSIZE = 15
+TITLE_FONTSIZE      = 14
+TICK_LABELSIZE      = 13
+
 fig, axes = plt.subplots(3, 1, figsize=(10, 13))
 
 panels = [
@@ -169,10 +184,33 @@ for i, (ax, f_grid, S, title) in enumerate(panels):
     ax.plot(f_grid, np.sqrt(S), color='firebrick', lw=1.0)
     if i < 2:
         ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
-    ax.set_xlabel('$f$ [Hz]', fontsize=13)
-    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=13)
-    ax.set_title(title, fontsize=13)
-    ax.tick_params(labelsize=11)
+    ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_title(title, fontsize=TITLE_FONTSIZE)
+    ax.tick_params(labelsize=TICK_LABELSIZE)
 
 fig.tight_layout()
+
+# ── 5-panel jitter build-up: no jitter -> small -> large -> large/high-N -> alternating ─
+fig2, axes2 = plt.subplots(5, 1, figsize=(10, 20))
+
+panels2 = [
+    (axes2[0], f_grid_0,  S_0,  r'No jitter, $N = 1{,}000$'),
+    (axes2[1], f_grid_lo, S_lo, rf'Random cadence, $\delta = \pm{delta_lo:g}$ s, $N = 1{{,}}000$'),
+    (axes2[2], f_grid_1,  S_1,  rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 1{{,}}000$'),
+    (axes2[3], f_grid_2,  S_2,  rf'Random cadence, $\delta = \pm{delta:g}$ s, $N = 100{{,}}000$'),
+    (axes2[4], f_grid_3,  S_3,  r'Alternating cadence $T = 2.0/2.5$ s (Bragg peaks)'),
+]
+
+for i, (ax, f_grid, S, title) in enumerate(panels2):
+    ax.plot(f_grid, np.sqrt(S), color='firebrick', lw=1.0)
+    if i in (1, 2, 3):
+        ax.axvspan(ALIAS_LO, ALIAS_HI, color='gold', alpha=0.3, lw=0, zorder=0)
+    ax.set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_ylabel(r'$\sqrt{S}$ [rad/$\sqrt{\mathrm{Hz}}$]', fontsize=AXIS_LABEL_FONTSIZE)
+    ax.set_title(title, fontsize=TITLE_FONTSIZE)
+    ax.tick_params(labelsize=TICK_LABELSIZE)
+
+fig2.tight_layout()
+
 plt.show()
