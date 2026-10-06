@@ -124,6 +124,8 @@ def alternating_cadence(t_span, t_a=2.0, t_b=2.5):
 
 # ── shared frequency range for all three panels ────────────────────────────────
 F_LO, F_HI = 1e-3, 0.5
+# zoom targets: f_sig and its harmonics k*f_sig (aliased peaks are as narrow as f_sig)
+HARMONICS = [k * f_sig for k in range(1, 6)]
 ALIAS_LO, ALIAS_HI = 0.335, 0.488   # alias region highlighted on panels 1-2 (delta = 0.3 s)
 
 # alias band for the delta = 0.1 s panel: same center (f_nom - f_sig), half-width
@@ -139,8 +141,8 @@ delta = 0.3
 t_meas_1 = random_cadence(delta, 1_000)
 t_meas_2 = random_cadence(delta, 100_000)
 
-f_grid_1 = freq_grid(F_LO, F_HI, t_meas_1, f_centers=[f_sig])
-f_grid_2 = freq_grid(F_LO, F_HI, t_meas_2, f_centers=[f_sig], n_coarse=40000)
+f_grid_1 = freq_grid(F_LO, F_HI, t_meas_1, f_centers=HARMONICS)
+f_grid_2 = freq_grid(F_LO, F_HI, t_meas_2, f_centers=HARMONICS, n_coarse=40000)
 
 S_1 = ls_psd(t_meas_1, phases_for(t_meas_1 - T_fly), f_grid_1)
 S_2 = ls_psd(t_meas_2, phases_for(t_meas_2 - T_fly), f_grid_2)
@@ -150,8 +152,8 @@ delta_lo = 0.1
 t_meas_0   = random_cadence(0.0,      1_000)   # no jitter (perfectly uniform)
 t_meas_lo  = random_cadence(delta_lo, 1_000)   # small jitter
 
-f_grid_0  = freq_grid(F_LO, F_HI, t_meas_0,  f_centers=[f_sig])
-f_grid_lo = freq_grid(F_LO, F_HI, t_meas_lo, f_centers=[f_sig])
+f_grid_0  = freq_grid(F_LO, F_HI, t_meas_0,  f_centers=HARMONICS)
+f_grid_lo = freq_grid(F_LO, F_HI, t_meas_lo, f_centers=HARMONICS)
 
 S_0  = ls_psd(t_meas_0,  phases_for(t_meas_0 - T_fly),  f_grid_0)
 S_lo = ls_psd(t_meas_lo, phases_for(t_meas_lo - T_fly), f_grid_lo)
@@ -226,5 +228,55 @@ axes2[2].set_ylabel(Y_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
 axes2[-1].set_xlabel(X_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
 
 fig2.tight_layout()
+
+# ── 3x3 grid: jitter delta increases down the rows, N increases across columns ──
+grid_deltas = [0.0, 0.15, 0.3]
+grid_Ns     = [1_000, 10_000, 100_000]
+_cached = {(0.3, 1_000): (f_grid_1, t_meas_1), (0.3, 100_000): (f_grid_2, t_meas_2)}
+
+NOISE_ASD   = 1e-5      # white phase-noise ASD [rad/sqrt(Hz)]
+NOISE_COLOR = '#1b5e20'
+noise_sigma = NOISE_ASD / np.sqrt(T_nom)   # per-shot sigma at the nominal cadence
+noise_rng   = np.random.default_rng(1)
+
+grid_spectra = {}   # (d, n) -> (f_grid, S_clean, S_noisy)
+for d in grid_deltas:
+    for n in grid_Ns:
+        if (d, n) in _cached:
+            f_g, t_m = _cached[(d, n)]
+        else:
+            t_m = random_cadence(d, n)
+            f_g = freq_grid(F_LO, F_HI, t_m, f_centers=HARMONICS,
+                            n_coarse=4000 if n <= 10_000 else 40000)
+        y = phases_for(t_m - T_fly)
+        y_noisy = y + noise_rng.normal(0.0, noise_sigma, size=len(y))
+        grid_spectra[(d, n)] = (f_g, ls_psd(t_m, y, f_g), ls_psd(t_m, y_noisy, f_g))
+
+def plot_jitter_N_grid(log_y, with_noise=False):
+    figg, axg = plt.subplots(3, 3, figsize=(18, 13), sharex=True)
+    for r, d in enumerate(grid_deltas):
+        for c, n in enumerate(grid_Ns):
+            ax = axg[r, c]
+            f_g, S, S_noisy = grid_spectra[(d, n)]
+            if with_noise:
+                ax.plot(f_g, np.sqrt(S_noisy), color=NOISE_COLOR, lw=0.5, zorder=3)
+            ax.plot(f_g, np.sqrt(S), color='firebrick', lw=1.0, zorder=4)
+            if log_y:
+                ax.set_yscale('log')
+            n_tex = f'{n:,}'.replace(',', '{,}')
+            ax.set_title(rf'$\delta = \pm{d:g}$ s, $N = {n_tex}$',
+                         fontsize=TITLE_FONTSIZE, fontweight='bold')
+            ax.tick_params(labelsize=TICK_LABELSIZE)
+    for r in range(3):
+        axg[r, 0].set_ylabel(Y_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
+    for c in range(3):
+        axg[-1, c].set_xlabel(X_LABEL, fontsize=AXIS_LABEL_FONTSIZE)
+    figg.tight_layout()
+    return figg
+
+fig3 = plot_jitter_N_grid(log_y=False)
+fig4 = plot_jitter_N_grid(log_y=True)
+fig5 = plot_jitter_N_grid(log_y=False, with_noise=True)
+fig6 = plot_jitter_N_grid(log_y=True,  with_noise=True)
 
 plt.show()

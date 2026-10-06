@@ -292,10 +292,12 @@ def peak_at(f_k, S_urad, f_target):
     idx = np.argmin(np.abs(f_k - f_target))
     return f_k[idx], S_urad[idx]
 
-f_k, S_k_raw  = periodogram(phase_diff_raw)
-_,   S_k_uldm = periodogram(phase_diff_uldm)
-urad_raw      = np.sqrt(S_k_raw) * 1e6
-urad_uldm     = np.sqrt(S_k_uldm) * 1e6
+f_k, S_k_raw       = periodogram(phase_diff_raw)
+_,   S_k_uldm      = periodogram(phase_diff_uldm)
+_,   S_k_uldm_only = periodogram(uldm)
+urad_raw           = np.sqrt(S_k_raw) * 1e6
+urad_uldm          = np.sqrt(S_k_uldm) * 1e6
+urad_uldm_only     = np.sqrt(S_k_uldm_only) * 1e6   # ULDM tone on its own, no scaffold
 
 # ── Noise floor (house style from fig2_circle_summary.py, stretch level only) ──
 NOISE_LEVELS = [
@@ -336,7 +338,15 @@ for m, row in zip(modes, rows_raw):
           f"peak={row['peak']:>10.4g} urad/rtHz  {status}")
 
 # ── Shared plotting helpers ──────────────────────────────────────────────────
+# GGN and ULDM are each plotted as their OWN full periodogram, bold, rather
+# than trying to hand-pick individual fundamental/harmonic/intermod bins to
+# mark: the periodogram of a source already contains every real spectral
+# feature it produces (harmonics, aliases, intermodulation, all of it), so
+# plotting it directly and boldly is both simpler and complete by
+# construction. GGN_LW/ULDM_LW just need to clear the noise floor's lw.
 AXIS_LABEL_FONTSIZE = 20
+GGN_LW  = 2.2
+ULDM_LW = 2.2
 
 def plot_phase_panel(ax):
     mask_100s = subsample_times <= 100
@@ -344,20 +354,11 @@ def plot_phase_panel(ax):
     ax.set_xlabel('$t$ [s]', fontsize=AXIS_LABEL_FONTSIZE)
     ax.set_ylabel(r'$\Delta\Phi$ [µrad]', fontsize=AXIS_LABEL_FONTSIZE)
 
-def mark_uldm(ax, y_min, f_bin, peak):
-    # bold, unlabeled marker -- thicker than the noise/periodogram trace it sits on
-    ax.vlines(f_bin, y_min, peak, color=COLORS['uldm'], lw=2.5, zorder=4)
-    ax.scatter([f_bin], [peak], color=COLORS['uldm'], zorder=5, s=40, marker='D')
+def plot_ggn(ax, zorder=3):
+    ax.plot(f_k, urad_raw, color=COLORS['fundamental'], lw=GGN_LW, zorder=zorder)
 
-def mark_modes(ax, y_min, rows):
-    # one bold, unlabeled marker per mode -- plotted individually (not merged
-    # by folded bin) so every mode is represented even when several alias
-    # onto the same, or a nearly identical, folded frequency
-    for row in rows:
-        ax.vlines(row['f_bin'], y_min, row['peak'], color=COLORS['fundamental'],
-                   lw=2.5, zorder=4)
-        ax.scatter([row['f_bin']], [row['peak']], color=COLORS['fundamental'],
-                   zorder=5, s=30)
+def plot_uldm(ax, zorder=3):
+    ax.plot(f_k, urad_uldm_only, color=COLORS['uldm'], lw=ULDM_LW, zorder=zorder)
 
 def finish_periodogram_axes(ax, y_min, y_max, log=True):
     if log:
@@ -376,56 +377,54 @@ plot_phase_panel(ax1a)
 
 y_min1 = 0.1 * urad_raw[urad_raw > 0].min()
 y_max1 = 3 * urad_raw.max()
-ax1b.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2, label='scaffold')
-mark_modes(ax1b, y_min1, rows_raw)
+plot_ggn(ax1b)
 finish_periodogram_axes(ax1b, y_min1, y_max1)
 ax1b.legend(handles=[
-    plt.Line2D([], [], color='firebrick', lw=1.5, label='scaffold'),
+    plt.Line2D([], [], color=COLORS['fundamental'], lw=GGN_LW, label='scaffold (GGN)'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig1.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff.png', dpi=200)
 
-# ── Figure 2: scaffold + ULDM ────────────────────────────────────────────────
+# ── Figure 2: scaffold + ULDM, plotted as separate periodograms ─────────────
 fig2, (ax2a, ax2b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
 plot_phase_panel(ax2a)
 
-y_min2 = 0.1 * min(urad_uldm[urad_uldm > 0].min(), f_phi_peak_uldm)
-y_max2 = 3 * max(urad_uldm.max(), f_phi_peak_uldm)
-ax2b.plot(f_k, urad_uldm, color='#555555', lw=0.6, zorder=2, label='scaffold + ULDM')
-mark_uldm(ax2b, y_min2, f_phi_bin, f_phi_peak_uldm)
-mark_modes(ax2b, y_min2, rows_uldm)
+y_min2 = 0.1 * min(urad_raw[urad_raw > 0].min(), urad_uldm_only[urad_uldm_only > 0].min())
+y_max2 = 3 * max(urad_raw.max(), urad_uldm_only.max())
+plot_ggn(ax2b)
+plot_uldm(ax2b)
 finish_periodogram_axes(ax2b, y_min2, y_max2)
 ax2b.legend(handles=[
-    plt.Line2D([], [], color='#555555', lw=1.5, label='scaffold + ULDM'),
-    plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
+    plt.Line2D([], [], color=COLORS['fundamental'], lw=GGN_LW, label='scaffold (GGN)'),
+    plt.Line2D([], [], color=COLORS['uldm'], lw=ULDM_LW, label='ULDM tone'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig2.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm.png', dpi=200)
 
-# ── Figure 3: scaffold + ULDM + noise floors ─────────────────────────────────
+# ── Figure 3: scaffold + ULDM over the noisy periodogram ─────────────────────
 fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(10, 15), tight_layout=True)
 plot_phase_panel(ax3a)
 
 y_min3 = 0.1 * min(lvl['asd'] for lvl in NOISE_LEVELS) * 1e6
-y_max3 = 3 * max(urad_noise['stretch'].max(), f_phi_peak_noise)
+y_max3 = 3 * max(urad_raw.max(), urad_uldm_only.max())
 for lvl in NOISE_LEVELS:
     ax3b.plot(f_k, urad_noise[lvl['key']], color=lvl['color'], lw=lvl['lw'], zorder=lvl['zorder'])
-mark_uldm(ax3b, y_min3, f_phi_bin, f_phi_peak_noise)
-mark_modes(ax3b, y_min3, rows_noise)
+plot_ggn(ax3b, zorder=4)
+plot_uldm(ax3b, zorder=4)
 finish_periodogram_axes(ax3b, y_min3, y_max3)
 ax3b.legend(handles=[
     plt.Line2D([], [], color=lvl['color'], lw=2.5, label=lvl['label']) for lvl in NOISE_LEVELS
 ] + [
-    plt.Line2D([], [], color=COLORS['uldm'], marker='D', ls='', label=r'ULDM tone $f_\varphi$'),
+    plt.Line2D([], [], color=COLORS['fundamental'], lw=GGN_LW, label='scaffold (GGN)'),
+    plt.Line2D([], [], color=COLORS['uldm'], lw=ULDM_LW, label='ULDM tone'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig3.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_uldm_noise.png', dpi=200)
 
 # ── Figure 4: plain scaffold periodogram, linear y-axis (no log) ────────────
 fig4, ax4 = plt.subplots(figsize=(10, 7.5), tight_layout=True)
 y_max4 = 1.1 * urad_raw.max()
-ax4.plot(f_k, urad_raw, color='firebrick', lw=0.6, zorder=2, label='scaffold')
-mark_modes(ax4, 0.0, rows_raw)
+plot_ggn(ax4)
 finish_periodogram_axes(ax4, 0.0, y_max4, log=False)
 ax4.legend(handles=[
-    plt.Line2D([], [], color='firebrick', lw=1.5, label='scaffold'),
+    plt.Line2D([], [], color=COLORS['fundamental'], lw=GGN_LW, label='scaffold (GGN)'),
 ], fontsize=8, loc='upper right', frameon=False)
 fig4.savefig(r'C:\Users\Georg\Desktop\scaffold_phasediff_linear.png', dpi=200)
 
