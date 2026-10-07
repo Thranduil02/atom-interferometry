@@ -1,5 +1,5 @@
 """
-Alias-to-main-peak height ratio vs N (1,000 to 50,000), for
+Alias-to-main-peak height ratio vs N (1,000 to 10,000), for
 random cycle-time jitter delta = 0, 0.1, 0.2, 0.3 s.
 
 Same setup as cadence_grid_new (fig2_final AICE parameters, 0.05 Hz vertical
@@ -12,7 +12,7 @@ so its height relative to the main peak falls as N grows.
 Heights are the maximum of sqrt(S) inside a fixed window around each peak
 (narrow around f_sig, wider around the alias to catch the smeared line), the
 same windows for every N and delta. Jittered points are averaged over
-N_SEEDS independent jitter draws; the shaded band is the min-max over
+N_SEEDS independent jitter draws; the shaded band is the mean +/- one standard deviation (sqrt of the variance) over
 those draws. The jittered curves are fitted to a + b/sqrt(N).
 
 Physics model reused from cadence_grid_new / cadence_bragg_comparison.
@@ -45,9 +45,9 @@ f_s   = 1.0 / T_nom
 f_alias = f_s - f_sig          # first alias of the oscillator
 
 DELTAS  = [0.0, 0.1, 0.2, 0.3]
-N_STEP  = 2_500
-Ns      = list(range(1_000, 50_001, N_STEP))
-N_SEEDS = 10
+N_STEP  = 500
+Ns      = list(range(1_000, 10_001, N_STEP))
+N_SEEDS = 100
 
 OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
 MIN_COARSE = 300               # floor on coarse-grid points per window
@@ -162,7 +162,9 @@ for d in DELTAS:
             show_progress(f"delta={d:g}  N={n:,}  draw {j+1}/{len(seeds)}")
             per_seed[i, j] = peak_ratio(d, n, sd)
             done_work += n**2
-    ratios[d] = (per_seed.mean(1), per_seed.min(1), per_seed.max(1))
+    mean = per_seed.mean(1)
+    sd   = per_seed.std(1, ddof=1) if per_seed.shape[1] > 1 else np.zeros(len(Ns))
+    ratios[d] = (mean, np.maximum(mean - sd, 0.0), mean + sd)   # mean, and mean -/+ 1 std dev
     print(f"\ndelta = {d:g} s: mean ratio {ratios[d][0][0]:.3f} (N={Ns[0]:,}) -> "
           f"{ratios[d][0][-1]:.3f} (N={Ns[-1]:,})", flush=True)
 
@@ -183,7 +185,7 @@ fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
 for d in DELTAS:
     pm = r'\pm' if d else ''
     mean, lo, hi = ratios[d]
-    ax.fill_between(Ns, lo, hi, color=CURVE_COLORS[d], alpha=0.2, lw=0)   # min-max over jitter draws
+    ax.fill_between(Ns, lo, hi, color=CURVE_COLORS[d], alpha=0.2, lw=0)   # mean +/- 1 std dev over jitter draws
     ax.plot(Ns, mean, '-', color=CURVE_COLORS[d], lw=1.2,
             label=rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$')
 for d, (a, b) in fits.items():
