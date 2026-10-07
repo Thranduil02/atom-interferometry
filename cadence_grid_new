@@ -132,13 +132,21 @@ ZOOM_CENTERS = sorted({
 })
 
 # ── noise ──────────────────────────────────────────────────────────────────────
-NOISE_ASD   = 1e-4      # white phase-noise ASD [rad/sqrt(Hz)] (fig2_final uses 1e-5, hidden here by the jitter floor)
-NOISE_COLOR = '#1b5e20'
-noise_sigma = NOISE_ASD / np.sqrt(T_nom)   # per-shot sigma at the nominal cadence
-noise_rng   = np.random.default_rng(1)
+# white phase noise, ASD [rad/sqrt(Hz)]; the shot-to-shot sigma at the nominal
+# cadence is ASD / sqrt(T_nom). Both levels scale one shared unit-normal draw,
+# so they sit on the same noise realisation.
+NOISE_LEVELS = [
+    dict(asd=1e-5, color='#a3d9a3', lw=0.35, zorder=3),   # fig2_final level, light green
+    dict(asd=1e-4, color='#2e7d32', lw=0.35, zorder=2),   # higher level, darker green
+]
+NOISE_BASE = NOISE_LEVELS[0]['asd']
+noise_rng  = np.random.default_rng(1)
+
+def noise_label(asd):
+    return f'shot noise ({asd:.0e})'.replace('e-0', 'e-')
 
 # ── spectra for every (delta, N) ───────────────────────────────────────────────
-grid_spectra = {}   # (d, n) -> (f_grid, S_clean, S_noisy)
+grid_spectra = {}   # (d, n) -> (f_grid, S_clean, {asd: S_noisy})
 for d in DELTAS:
     for n in Ns:
         print(f"delta = {d:g} s, N = {n:,} ...", flush=True)
@@ -146,13 +154,14 @@ for d in DELTAS:
         f_g = freq_grid(F_LO, F_HI, t_m, f_centers=ZOOM_CENTERS,
                         n_coarse=4000 if n <= 10_000 else 40000)
         y = phases_for(t_m - T_fly)
-        y_noisy = y + noise_rng.normal(0.0, noise_sigma, size=len(y))
-        grid_spectra[(d, n)] = (f_g, ls_psd(t_m, y, f_g), ls_psd(t_m, y_noisy, f_g))
+        unit_noise = noise_rng.normal(0.0, 1.0, size=len(y)) / np.sqrt(T_nom)
+        S_noisy = {lvl['asd']: ls_psd(t_m, y + lvl['asd'] * unit_noise, f_g)
+                   for lvl in NOISE_LEVELS}
+        grid_spectra[(d, n)] = (f_g, ls_psd(t_m, y, f_g), S_noisy)
 
 # ── plot style (follows the main figure of fig2_final.py) ─────────────────────
 COLORS = dict(
-    fundamental = '#c1272d',   # red         -- oscillator spectrum
-    noise       = '#a3d9a3',   # light green -- noise realisation
+    fundamental = '#c1272d',   # red -- oscillator spectrum
 )
 f_N     = 0.5 / T_nom          # Nyquist frequency of the mean cadence
 Y_LABEL = r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]'
@@ -160,19 +169,20 @@ X_LABEL = '$f$ [Hz]'
 
 # one shared y-range for every panel (rad -> urad)
 _peak_urad = max(np.sqrt(S).max() for _, S, _ in grid_spectra.values()) * 1e6
-Y_MIN_LOG, Y_MAX_LOG = 0.1 * NOISE_ASD * 1e6, 3 * _peak_urad
-Y_MAX_LIN = 1.1 * _peak_urad
+Y_MIN_LOG, Y_MAX_LOG = 0.1 * NOISE_BASE * 1e6, 3 * _peak_urad
 
-def plot_jitter_N_grid(log_y, with_noise=False):
+def plot_jitter_N_grid(log_y, noise_asds=()):
+    """noise_asds: ASDs (keys of NOISE_LEVELS) whose noisy periodograms to overlay."""
+    levels = [lvl for lvl in NOISE_LEVELS if lvl['asd'] in noise_asds]
     figg, axg = plt.subplots(3, 3, figsize=(12, 9.5), dpi=200,
-                             sharex=True, sharey=True)
+                             sharex=True, sharey=log_y)   # linear: per-panel y
     for r, d in enumerate(DELTAS):
         for c, n in enumerate(Ns):
             ax = axg[r, c]
             f_g, S, S_noisy = grid_spectra[(d, n)]
-            if with_noise:
-                ax.plot(f_g, np.sqrt(S_noisy) * 1e6, color=COLORS['noise'],
-                        lw=0.35, zorder=3)
+            for lvl in levels:
+                ax.plot(f_g, np.sqrt(S_noisy[lvl['asd']]) * 1e6, color=lvl['color'],
+                        lw=lvl['lw'], zorder=lvl['zorder'])
             ax.plot(f_g, np.sqrt(S) * 1e6, color=COLORS['fundamental'],
                     lw=0.8, zorder=4)
             ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
@@ -186,14 +196,18 @@ def plot_jitter_N_grid(log_y, with_noise=False):
         axg[0, 0].set_ylim(Y_MIN_LOG, Y_MAX_LOG)
         f_N_y = Y_MAX_LOG * 0.5
     else:
-        axg[0, 0].set_ylim(0, Y_MAX_LIN)
-        f_N_y = Y_MAX_LIN * 0.5
+        for r in range(3):
+            for c in range(3):
+                axg[r, c].set_ylim(0, 1.1 * np.sqrt(grid_spectra[(DELTAS[r], Ns[c])][1]).max() * 1e6)
+        f_N_y = axg[0, 0].get_ylim()[1] * 0.5
     axg[0, 0].set_xlim(F_LO, F_HI)
     axg[0, 0].text(f_N, f_N_y, r'  $f_N$', fontsize=9, ha='left', va='center')
-    if with_noise:
-        axg[0, 0].legend(handles=[plt.Line2D([], [], color=COLORS['noise'], lw=1.5,
-                                              label=f'shot noise ({NOISE_ASD:.0e})'.replace('e-0', 'e-'))],
+    if levels:
+        axg[0, 0].legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
+                                              label=noise_label(lvl['asd'])) for lvl in levels],
                          fontsize=8, loc='upper right', frameon=False)
+    for ax in axg.flat:
+        ax.tick_params(labelleft=True)
     axg[1, 0].set_ylabel(Y_LABEL, fontsize=12)
     axg[-1, 1].set_xlabel(X_LABEL, fontsize=12)
     figg.tight_layout()
@@ -201,7 +215,8 @@ def plot_jitter_N_grid(log_y, with_noise=False):
 
 fig1 = plot_jitter_N_grid(log_y=False)
 fig2 = plot_jitter_N_grid(log_y=True)
-fig3 = plot_jitter_N_grid(log_y=False, with_noise=True)
-fig4 = plot_jitter_N_grid(log_y=True,  with_noise=True)
+fig3 = plot_jitter_N_grid(log_y=False, noise_asds=(1e-5,))
+fig4 = plot_jitter_N_grid(log_y=True,  noise_asds=(1e-5,))
+fig5 = plot_jitter_N_grid(log_y=True,  noise_asds=(1e-5, 1e-4))   # both noise levels
 
 plt.show()
