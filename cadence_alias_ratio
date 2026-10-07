@@ -1,0 +1,200 @@
+"""
+Alias-to-main-peak height ratio vs N (1,000 to 50,000), for
+random cycle-time jitter delta = 0, 0.1, 0.2, 0.3 s.
+
+Same setup as cadence_grid_new (fig2_final AICE parameters, 0.05 Hz vertical
+oscillator, T_c ~ Uniform(T_nom - delta, T_nom + delta), Lomb-Scargle, no
+noise). The oscillator at f_sig = 0.05 Hz is sampled at the mean rate
+f_s = 1/T_nom, so it has an alias at f_s - f_sig. With uniform sampling
+(delta = 0) the alias is as tall as the main peak (ratio 1); jitter smears it,
+so its height relative to the main peak falls as N grows.
+
+Heights are the maximum of sqrt(S) inside a fixed window around each peak
+(narrow around f_sig, wider around the alias to catch the smeared line), the
+same windows for every N and delta. Jittered points are averaged over
+N_SEEDS independent jitter draws; the shaded band is the min-max over
+those draws. The jittered curves are fitted to a + b/sqrt(N).
+
+Physics model reused from cadence_grid_new / cadence_bragg_comparison.
+"""
+
+import time
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── constants (AICE params from fig2_final.py) ─────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81
+u0 = 24.5          # launch speed [m/s]
+T = 2.5            # half-interferometer time [s]
+dt = 0.01
+delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
+
+# source (fig2_final src_common), vertical linear oscillator
+M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
+f_sig = 0.05
+
+T_fly = 2 * T
+N_fly = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+T_nom = 5.5                    # nominal cycle; >= T_fly + max jitter
+f_s   = 1.0 / T_nom
+f_alias = f_s - f_sig          # first alias of the oscillator
+
+DELTAS  = [0.0, 0.1, 0.2, 0.3]
+N_STEP  = 2_500
+Ns      = list(range(1_000, 50_001, N_STEP))
+N_SEEDS = 10
+
+OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
+MIN_COARSE = 300               # floor on coarse-grid points per window
+MAIN_HALF  = 0.002             # [Hz] window half-width around f_sig
+ALIAS_HALF = 0.010             # [Hz] window half-width around the alias
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(delta_r, delta_r, upper=False)
+upper2_loc = arm_positions(delta_r, delta_r, upper=True)
+
+def phases_for(t_starts, chunk=10_000):
+    out = np.empty(len(t_starts))
+    for i0 in range(0, len(t_starts), chunk):
+        t_abs = t_starts[i0:i0 + chunk, None] + t_local[None, :]
+        h = h_0 + A * np.cos(2*np.pi * f_sig * t_abs)
+        pd1 = V(upper1_loc, h) - V(lower1_loc, h)
+        pd2 = V(upper2_loc, h) - V(lower2_loc, h)
+        out[i0:i0 + chunk] = (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local, axis=1)
+    return out
+
+def ls_psd(t, y, freqs, batch=200):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    S = np.empty_like(freqs)
+    for i0 in range(0, len(freqs), batch):
+        f_b = freqs[i0:i0 + batch]
+        w = 2 * np.pi * f_b
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
+        sh = wt - (w * tau)[:, None]
+        ct = np.cos(sh);  st = np.sin(sh)
+        C = ct @ y;  Sn = st @ y
+        CC = (ct**2).sum(1);  SS = (st**2).sum(1)
+        S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
+    return S
+
+def window_grid(f_c, half, t_meas, zoom_cycles=30, n_fine=300):
+    """Coarse grid over [f_c - half, f_c + half] plus a fine zoom on f_c (the
+    unsmeared line is only ~1/T_span wide). The coarse point count scales with
+    T_span, so the oversampling relative to the native resolution 1/T_span is
+    OVERSAMPLE at every N."""
+    T_span = t_meas[-1] - t_meas[0]
+    n_coarse = max(MIN_COARSE, int(np.ceil(OVERSAMPLE * 2 * half * T_span)))
+    half_zoom = zoom_cycles / T_span
+    return np.unique(np.concatenate([
+        np.linspace(f_c - half, f_c + half, n_coarse),
+        np.linspace(f_c - half_zoom, f_c + half_zoom, n_fine),
+    ]))
+
+def random_cadence(delta, N_cycles, seed=0):
+    rng = np.random.default_rng(seed)
+    T_cycles = rng.uniform(T_nom - delta, T_nom + delta, N_cycles)
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+def peak_ratio(delta, n, seed):
+    t_m = random_cadence(delta, n, seed=seed)
+    y = phases_for(t_m - T_fly)
+    f_main  = window_grid(f_sig,   MAIN_HALF,  t_m)
+    f_ali   = window_grid(f_alias, ALIAS_HALF, t_m)
+    main  = np.sqrt(ls_psd(t_m, y, f_main)).max()
+    alias = np.sqrt(ls_psd(t_m, y, f_ali)).max()
+    return alias / main
+
+# ── ratio vs N ─────────────────────────────────────────────────────────────────
+def seeds_for(d):
+    return [0] if d == 0 else list(range(N_SEEDS))
+
+# progress bar, weighted by evaluation cost (grid points and cycles both grow
+# with N, so one evaluation costs ~N^2) so the ETA is meaningful
+total_work = sum(len(seeds_for(d)) * n**2 for d in DELTAS for n in Ns)
+done_work, t_start = 0.0, time.time()
+
+def show_progress(label):
+    frac = done_work / total_work
+    el = time.time() - t_start
+    eta = el * (1 - frac) / frac if frac > 0 else float('nan')
+    bar = '#' * int(30 * frac) + '-' * (30 - int(30 * frac))
+    print(chr(13) + f"[{bar}] {100*frac:5.1f}%  elapsed {el/60:6.1f} min  ETA {eta/60:6.1f} min  {label}   ",
+          end='', flush=True)
+
+ratios = {}   # delta -> (mean, min, max) over jitter draws, each an array over Ns
+for d in DELTAS:
+    seeds = seeds_for(d)
+    per_seed = np.empty((len(Ns), len(seeds)))
+    for i, n in enumerate(Ns):
+        for j, sd in enumerate(seeds):
+            show_progress(f"delta={d:g}  N={n:,}  draw {j+1}/{len(seeds)}")
+            per_seed[i, j] = peak_ratio(d, n, sd)
+            done_work += n**2
+    ratios[d] = (per_seed.mean(1), per_seed.min(1), per_seed.max(1))
+    print(f"\ndelta = {d:g} s: mean ratio {ratios[d][0][0]:.3f} (N={Ns[0]:,}) -> "
+          f"{ratios[d][0][-1]:.3f} (N={Ns[-1]:,})", flush=True)
+
+# ── fit the jittered curves to a + b/sqrt(N) (linear least squares in 1/sqrt(N)) ──
+Ns_arr = np.array(Ns, dtype=float)
+fits = {}     # delta -> (a, b)
+for d in DELTAS:
+    if d == 0:
+        continue
+    b, a = np.polyfit(1 / np.sqrt(Ns_arr), ratios[d][0], 1)
+    fits[d] = (a, b)
+    print(f"delta = {d:g} s fit: a = {a:.4f}, b = {b:.3f}  (ratio = a + b/sqrt(N))")
+
+# ── plot (style of fig2_final.py) ──────────────────────────────────────────────
+CURVE_COLORS = {0.0: '#c1272d', 0.1: '#1f4e9c', 0.2: '#e07b00', 0.3: '#2e7d32'}   # fig2_final red / blue / orange + green
+
+fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+for d in DELTAS:
+    pm = r'\pm' if d else ''
+    mean, lo, hi = ratios[d]
+    ax.fill_between(Ns, lo, hi, color=CURVE_COLORS[d], alpha=0.2, lw=0)   # min-max over jitter draws
+    ax.plot(Ns, mean, '-', color=CURVE_COLORS[d], lw=1.2,
+            label=rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$')
+for d, (a, b) in fits.items():
+    ax.plot(Ns_arr, a + b / np.sqrt(Ns_arr), '--', color=CURVE_COLORS[d], lw=1.0, zorder=5)
+ax.plot([], [], 'k--', lw=1.0, label=r'fit $a + b/\sqrt{N}$')
+ax.set_xlim(Ns[0], Ns[-1])
+ax.set_ylim(0, 1.1 * max(r[2].max() for r in ratios.values()))
+ax.set_xlabel('$N$', fontsize=12)
+ax.set_ylabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
+ax.tick_params(labelsize=11)
+ax.legend(fontsize=8, loc='best', frameon=False)
+fig.tight_layout()
+
+plt.show()
