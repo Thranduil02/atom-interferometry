@@ -52,7 +52,7 @@ f_alias = f_s - f_sig          # first alias of the oscillator
 
 # ── run settings ───────────────────────────────────────────────────────────────
 DELTA          = 0.1           # jitter amplitude [s]
-N_MAX          = 1_000_000
+N_MAX          = 1_820_000      # ~1e7 s of observing time at the 5.5 s cycle
 N_STEP         = 5_000         # N = 5,000, 10,000, ..., N_MAX
 Ns             = list(range(N_STEP, N_MAX + 1, N_STEP))
 N_REALISATIONS = 1             # jitter draws per N (>1 adds a min-max band)
@@ -180,5 +180,8 @@ ax.set_ylabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
 ax.tick_params(labelsize=11)
 ax.legend(fontsize=8, loc='best', frameon=False)
 fig.tight_layout()
+
+np.savez('alias_suppression_factor_results.npz', Ns=Ns, per_draw=per_draw, delta=DELTA)
+fig.savefig(r'C:\Users\Georg\Desktop\alias_suppression_factor.png', dpi=200)
 
 plt.show()
