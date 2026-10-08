@@ -1,5 +1,5 @@
 """
-Alias-to-main-peak height ratio vs N (1,000 to 10,000), for
+Alias-to-main-peak height ratio vs N (1,000 to 50,000), for
 random cycle-time jitter delta = 0, 0.1, 0.2, 0.3 s.
 
 Same setup as cadence_grid_new (fig2_final AICE parameters, 0.05 Hz vertical
@@ -45,9 +45,9 @@ f_s   = 1.0 / T_nom
 f_alias = f_s - f_sig          # first alias of the oscillator
 
 DELTAS  = [0.0, 0.1, 0.2, 0.3]
-N_STEP  = 500
-Ns      = list(range(1_000, 10_001, N_STEP))
-N_SEEDS = 100
+N_STEP  = 1_000
+Ns      = list(range(1_000, 50_001, N_STEP))
+N_SEEDS = 50
 
 OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
 MIN_COARSE = 300               # floor on coarse-grid points per window
