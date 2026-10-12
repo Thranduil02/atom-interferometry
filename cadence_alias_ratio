@@ -1,5 +1,5 @@
 """
-Alias-to-main-peak height ratio vs N (1,000 to 50,000), for
+Alias-to-main-peak height ratio vs N (5,000 to 100,000), for
 random cycle-time jitter delta = 0, 0.1, 0.2, 0.3 s.
 
 Same setup as cadence_grid_new (fig2_final AICE parameters, 0.05 Hz vertical
@@ -45,9 +45,9 @@ f_s   = 1.0 / T_nom
 f_alias = f_s - f_sig          # first alias of the oscillator
 
 DELTAS  = [0.0, 0.1, 0.2, 0.3]
-N_STEP  = 1_000
-Ns      = list(range(1_000, 50_001, N_STEP))
-N_SEEDS = 50
+N_STEP  = 5_000
+Ns      = list(range(5_000, 100_001, N_STEP))
+N_SEEDS = 20
 
 OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
 MIN_COARSE = 300               # floor on coarse-grid points per window
@@ -93,19 +93,26 @@ def phases_for(t_starts, chunk=10_000):
     return out
 
 def ls_psd(t, y, freqs, batch=200):
-    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2."""
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2.
+    Only cos(wt) and sin(wt) are evaluated; the tau shift (a = w*tau) is applied
+    afterwards by rotating the sums Σc², Σs², Σcs, Σcy, Σsy."""
     y = y - y.mean()
     dt_eff = (t[-1] - t[0]) / (len(t) - 1)
     S = np.empty_like(freqs)
     for i0 in range(0, len(freqs), batch):
         f_b = freqs[i0:i0 + batch]
-        w = 2 * np.pi * f_b
-        wt = np.outer(w, t)
-        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1)) / (2 * w)
-        sh = wt - (w * tau)[:, None]
-        ct = np.cos(sh);  st = np.sin(sh)
-        C = ct @ y;  Sn = st @ y
-        CC = (ct**2).sum(1);  SS = (st**2).sum(1)
+        wt = np.outer(2 * np.pi * f_b, t)
+        c = np.cos(wt);  s = np.sin(wt)
+        Scc = np.einsum('ij,ij->i', c, c)
+        Sss = np.einsum('ij,ij->i', s, s)
+        Scs = np.einsum('ij,ij->i', c, s)
+        Yc = c @ y;  Ys = s @ y
+        a = 0.5 * np.arctan2(2 * Scs, Scc - Sss)          # w*tau
+        ca = np.cos(a);  sa = np.sin(a)
+        C = ca * Yc + sa * Ys
+        Sn = ca * Ys - sa * Yc
+        CC = ca**2 * Scc + sa**2 * Sss + 2 * ca * sa * Scs
+        SS = ca**2 * Sss + sa**2 * Scc - 2 * ca * sa * Scs
         S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
     return S
 

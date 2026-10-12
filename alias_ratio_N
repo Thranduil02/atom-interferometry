@@ -1,0 +1,148 @@
+"""
+Alias-to-main-peak height ratio sqrt(S_alias/S_peak) at a single chosen N.
+
+Same physics and estimator as cadence_alias_ratio, but instead of sweeping N
+and plotting, it evaluates one N and prints the mean ratio and its standard
+deviation over N_REALISATIONS independent jitter draws, for each delta.
+Set N, DELTAS and N_REALISATIONS in the parameters block below.
+
+delta is the half-width of the uniform cycle-time jitter [s]; delta = 0 is
+uniform sampling (a single realisation, ratio ~1).
+"""
+
+import time
+
+import numpy as np
+
+# ── parameters to set ──────────────────────────────────────────────────────────
+N              = 1000000          # number of cycles
+DELTAS         = [0.3]   # jitter half-width(s) [s]
+N_REALISATIONS = 10                # jitter draws to average over
+
+# ── constants (AICE params from fig2_final.py) ─────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81
+u0 = 24.5          # launch speed [m/s]
+T = 2.5            # half-interferometer time [s]
+dt = 0.01
+delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
+
+# source (fig2_final src_common), vertical linear oscillator
+M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
+f_sig = 0.05
+
+T_fly = 2 * T
+N_fly = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+
+T_nom = 5.5                    # nominal cycle; >= T_fly + max jitter
+f_s   = 1.0 / T_nom
+f_alias = f_s - f_sig          # first alias of the oscillator
+
+OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
+MIN_COARSE = 300               # floor on coarse-grid points per window
+MAIN_HALF  = 0.002             # [Hz] window half-width around f_sig
+ALIAS_HALF = 0.010             # [Hz] window half-width around the alias
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(delta_r, delta_r, upper=False)
+upper2_loc = arm_positions(delta_r, delta_r, upper=True)
+
+def phases_for(t_starts, chunk=10_000):
+    out = np.empty(len(t_starts))
+    for i0 in range(0, len(t_starts), chunk):
+        t_abs = t_starts[i0:i0 + chunk, None] + t_local[None, :]
+        h = h_0 + A * np.cos(2*np.pi * f_sig * t_abs)
+        pd1 = V(upper1_loc, h) - V(lower1_loc, h)
+        pd2 = V(upper2_loc, h) - V(lower2_loc, h)
+        out[i0:i0 + chunk] = (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local, axis=1)
+    return out
+
+def ls_psd(t, y, freqs, batch=200):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2.
+    Only cos(wt) and sin(wt) are evaluated; the tau shift (a = w*tau) is applied
+    afterwards by rotating the sums Σc², Σs², Σcs, Σcy, Σsy."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    S = np.empty_like(freqs)
+    for i0 in range(0, len(freqs), batch):
+        f_b = freqs[i0:i0 + batch]
+        wt = np.outer(2 * np.pi * f_b, t)
+        c = np.cos(wt);  s = np.sin(wt)
+        Scc = np.einsum('ij,ij->i', c, c)
+        Sss = np.einsum('ij,ij->i', s, s)
+        Scs = np.einsum('ij,ij->i', c, s)
+        Yc = c @ y;  Ys = s @ y
+        a = 0.5 * np.arctan2(2 * Scs, Scc - Sss)          # w*tau
+        ca = np.cos(a);  sa = np.sin(a)
+        C = ca * Yc + sa * Ys
+        Sn = ca * Ys - sa * Yc
+        CC = ca**2 * Scc + sa**2 * Sss + 2 * ca * sa * Scs
+        SS = ca**2 * Sss + sa**2 * Scc - 2 * ca * sa * Scs
+        S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
+    return S
+
+def window_grid(f_c, half, t_meas, zoom_cycles=30, n_fine=300):
+    """Coarse grid over [f_c - half, f_c + half] plus a fine zoom on f_c (the
+    unsmeared line is only ~1/T_span wide). The coarse point count scales with
+    T_span, so the oversampling relative to the native resolution 1/T_span is
+    OVERSAMPLE at every N."""
+    T_span = t_meas[-1] - t_meas[0]
+    n_coarse = max(MIN_COARSE, int(np.ceil(OVERSAMPLE * 2 * half * T_span)))
+    half_zoom = zoom_cycles / T_span
+    return np.unique(np.concatenate([
+        np.linspace(f_c - half, f_c + half, n_coarse),
+        np.linspace(f_c - half_zoom, f_c + half_zoom, n_fine),
+    ]))
+
+def random_cadence(delta, N_cycles, seed=0):
+    rng = np.random.default_rng(seed)
+    T_cycles = rng.uniform(T_nom - delta, T_nom + delta, N_cycles)
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+def peak_ratio(delta, n, seed):
+    t_m = random_cadence(delta, n, seed=seed)
+    y = phases_for(t_m - T_fly)
+    f_main  = window_grid(f_sig,   MAIN_HALF,  t_m)
+    f_ali   = window_grid(f_alias, ALIAS_HALF, t_m)
+    main  = np.sqrt(ls_psd(t_m, y, f_main)).max()
+    alias = np.sqrt(ls_psd(t_m, y, f_ali)).max()
+    return alias / main
+
+# ── ratio at a single N ────────────────────────────────────────────────────────
+t_start = time.time()
+for d in DELTAS:
+    seeds = [0] if d == 0 else list(range(N_REALISATIONS))
+    vals = np.empty(len(seeds))
+    for j, sd in enumerate(seeds):
+        el = time.time() - t_start
+        print(chr(13) + f"delta={d:g}  draw {j+1}/{len(seeds)}  elapsed {el/60:.1f} min   ", end='', flush=True)
+        vals[j] = peak_ratio(d, N, sd)
+    std = vals.std(ddof=1) if len(vals) > 1 else 0.0
+    print(chr(13) + f"delta = {d:g} s, N = {N:,}, realisations = {len(vals)}: "
+          f"ratio = {vals.mean():.4f} +/- {std:.4f} (std over realisations)" + " " * 20, flush=True)
