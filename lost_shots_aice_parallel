@@ -25,7 +25,7 @@ for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
     os.environ[_v] = '1'
 
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -175,11 +175,16 @@ if __name__ == "__main__":
     with ProcessPoolExecutor(max_workers=N_WORKERS, initializer=_init_worker,
                              initargs=(t_all, ggn_only, uldm_unit, f_grid,
                                        peak_mask, uldm_mask)) as pool:
-        futures = [pool.submit(one_realisation, t) for t in tasks]
-        for n_done, fut in enumerate(as_completed(futures), start=1):
-            i_p, floor, d_min = fut.result()
-            if not np.isnan(d_min):
-                fl[i_p].append(floor);  dm[i_p].append(d_min)
+        pending, n_done = {pool.submit(one_realisation, t) for t in tasks}, 0
+        show_progress(0.0, t0_scan, f'0/{len(tasks)} realisations (first results take a while)')
+        while pending:
+            done, pending = wait(pending, timeout=5, return_when=FIRST_COMPLETED)
+            for fut in done:
+                i_p, floor, d_min = fut.result()
+                if not np.isnan(d_min):
+                    fl[i_p].append(floor);  dm[i_p].append(d_min)
+                n_done += 1
+            # redraw every few seconds so elapsed time keeps ticking between results
             show_progress(n_done / len(tasks), t0_scan, f'{n_done}/{len(tasks)} realisations')
     show_progress(1.0, t0_scan, 'scan done')
 
@@ -204,5 +209,9 @@ if __name__ == "__main__":
     ax.tick_params(labelsize=11)
     ax.legend(fontsize=8, loc='upper left', frameon=False)
     fig.tight_layout()
+
+    out_path = os.path.join(os.path.expanduser('~'), 'Desktop', 'lost shots aice.png')
+    fig.savefig(out_path, dpi=200)
+    print(f"Figure saved to {out_path}")
 
     plt.show()
