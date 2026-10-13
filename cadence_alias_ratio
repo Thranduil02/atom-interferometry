@@ -45,8 +45,8 @@ f_s   = 1.0 / T_nom
 f_alias = f_s - f_sig          # first alias of the oscillator
 
 DELTAS  = [0.0, 0.1, 0.2, 0.3]
-N_STEP  = 5_000
-Ns      = list(range(5_000, 100_001, N_STEP))
+N_STEP  = 10000
+Ns      = list(range(1_000, int(1e6), N_STEP))
 N_SEEDS = 20
 
 OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
@@ -186,7 +186,11 @@ for d in DELTAS:
     print(f"delta = {d:g} s fit: a = {a:.4f}, b = {b:.3f}  (ratio = a + b/sqrt(N))")
 
 # ── plot (style of fig2_final.py) ──────────────────────────────────────────────
-CURVE_COLORS = {0.0: '#c1272d', 0.1: '#1f4e9c', 0.2: '#e07b00', 0.3: '#2e7d32'}   # fig2_final red / blue / orange + green
+# delta = 0 in the fig2_final red; the jittered deltas are spread along viridis,
+# so any list of DELTAS gets distinct colours
+jit = [d for d in DELTAS if d]
+CURVE_COLORS = {d: plt.cm.viridis(0.05 + 0.85 * i / max(len(jit) - 1, 1)) for i, d in enumerate(jit)}
+CURVE_COLORS[0.0] = '#c1272d'
 
 fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
 for d in DELTAS:
@@ -206,4 +210,15 @@ ax.tick_params(labelsize=11)
 ax.legend(fontsize=8, loc='best', frameon=False)
 fig.tight_layout()
 
+# ── fit parameters vs delta ────────────────────────────────────────────────────
+fit_deltas = np.array(list(fits))
+for idx, (name, ylabel) in enumerate([('a', r'$a$'), ('b', r'$b$')]):
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.plot(fit_deltas, [fits[d][idx] for d in fit_deltas], 'o-', color='#1f4e9c', lw=1.2, ms=4)
+    ax.set_xlabel(r'$\delta\,[\mathrm{s}]$', fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
 plt.show()
+
