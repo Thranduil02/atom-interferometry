@@ -1,0 +1,208 @@
+# -*- coding: utf-8 -*-
+"""
+Minimum detectable ULDM coupling d_min vs fraction of lost shots, for the AICE
+parameters of fig2_final.py -- parallel version of lost_shots_aice.
+
+Uniform cadence with each cycle independently failing with probability p.
+For each p, over N_real realisations of which shots are lost:
+  - noise floor = median Lomb-Scargle ASD of the oscillator-only data (surviving
+    timestamps only), outside the oscillator and ULDM windows;
+  - ULDM peak at a reference coupling D_REF = peak of the ULDM signal alone
+    through the same lost shots (linear in d, so the peak at d is (d/D_REF) times this);
+  - d_min = D_REF * floor / peak(D_REF): the d at which the ULDM peak reaches the floor.
+The figure shows the mean with a +/- 1 std band, fitted to d_min = a*sqrt(p) + b.
+
+Every (p, realisation) pair is independent, so they are spread over a pool of
+N_WORKERS processes. Each worker needs a few GB at large T_total (the LS builds
+chunk x N_shots arrays), so N_WORKERS is limited by RAM rather than cores. Each
+task has its own seed (spawned from SEED), so the result does not depend on how
+the tasks are scheduled; it differs from lost_shots_aice only in which random
+shots are lost.
+"""
+import os
+# one BLAS/OpenMP thread per worker, set before numpy is imported (workers re-import this file)
+for _v in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+    os.environ[_v] = '1'
+
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── parameters ─────────────────────────────────────────────────────────────────
+T_total  = 1e6        # total observation time [s]
+T_cyc    = 5.0        # uniform cycle time [s]
+N_total  = int(T_total / T_cyc)   # total shots attempted
+N_real   = 10         # realisations averaged per p value in the d_min scan
+P_MIN    = 0.0        # lost-shot fraction scan: from ...
+P_MAX    = 0.05       #   ... to (0.05 = 5 %)
+N_P      = 50         #   number of p values
+N_WORKERS = 4         # worker processes (about 2-3 GB RAM each at T_total = 1e6 s)
+SEED     = 99         # master seed; each task gets its own child seed
+D_REF = 1.0           # reference coupling the ULDM peak is measured at; d_min does not depend on it
+d_e = d_m_e = D_REF
+
+# ── constants ──────────────────────────────────────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * (2*np.pi / 698e-9) / m_atom
+G = 6.67e-11;  g = 9.81;  M = 1;  h_0 = 1;  D_0 = 3;  A = 0.5
+f_sig = 0.02
+u0 = 24.5;  dt = 0.01;  T = 2.5
+T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
+
+f_uldm = 0.05;  hbar_eV = 6.582119569e-16
+m_phi = 2*np.pi*f_uldm*hbar_eV
+G_nat = 6.708e-39;  rho_phi = 0.3
+theta = np.pi/2;  xi = 0.06;  omega_A = 2.67e15
+L_base = 140;  delta_r = 70;  n_lmt = 1000;  conv_factor = 2.77e-12
+
+def uldm_phase(t):
+    delta_omega_A = (omega_A*np.sqrt(G_nat*4*np.pi)*(d_m_e+(2+xi)*d_e)
+                     *(np.sqrt(2*rho_phi)/m_phi)*conv_factor)
+    omega_phi = 2*np.pi*f_uldm
+    return (8*(delta_omega_A/omega_phi)*(delta_r/L_base)
+            *np.sin(omega_phi*n_lmt*L_base/(2*3e8))
+            *np.sin(omega_phi*(T-(n_lmt-1)*L_base/3e8)/2)
+            *np.sin(omega_phi*T/2)
+            *np.cos(omega_phi*((T_fly+L_base/3e8)/2+t)+theta))
+
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0+k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _ = atom_path(p1[-1] if len(p1) else float(floor), v1+k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly-len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G*M/np.sqrt(D_0**2+(z-h)**2)
+
+def ls_psd(t, y, freqs, chunk=256):
+    y = y - y.mean()
+    dt_eff = (t[-1]-t[0])/(len(t)-1)
+    out = np.empty(len(freqs))
+    for i in range(0, len(freqs), chunk):
+        w  = 2*np.pi*freqs[i:i+chunk]
+        wt = np.outer(w, t)
+        tau = np.arctan2(np.sin(2*wt).sum(1), np.cos(2*wt).sum(1))/(2*w)
+        sh  = wt - (w*tau)[:,None]
+        ct  = np.cos(sh);  st = np.sin(sh)
+        C   = ct@y;  S  = st@y
+        CC  = (ct**2).sum(1);  SS = (st**2).sum(1)
+        out[i:i+chunk] = dt_eff*0.5*(C**2/CC + S**2/SS)
+    return out
+
+# ── progress bar with ETA ──────────────────────────────────────────────────────
+def show_progress(frac, t0, label):
+    el  = time.time() - t0
+    eta = el * (1 - frac) / frac if frac > 0 else float('nan')
+    bar = '#' * int(30 * frac) + '-' * (30 - int(30 * frac))
+    print(chr(13) + f"[{bar}] {100*frac:5.1f}%  elapsed {el/60:6.1f} min  ETA {eta/60:6.1f} min  {label}   ",
+          end='', flush=True)
+    if frac >= 1:
+        print()
+
+# ── worker side ────────────────────────────────────────────────────────────────
+_W = {}   # per-process shared data, set once by _init_worker
+
+def _init_worker(t_all, ggn_only, uldm_unit, f_grid, peak_mask, uldm_mask):
+    _W.update(t_all=t_all, ggn_only=ggn_only, uldm_unit=uldm_unit, f_grid=f_grid,
+              peak_mask=peak_mask, uldm_mask=uldm_mask)
+
+def one_realisation(task):
+    """One random set of lost shots at failure rate p -> (index of p, floor, d_min)."""
+    i_p, p, seed = task
+    surv = np.random.default_rng(seed).random(len(_W['t_all'])) >= p
+    tg   = _W['t_all'][surv]
+    if len(tg) < 10:
+        return i_p, np.nan, np.nan
+    asd_osc   = np.sqrt(ls_psd(tg, _W['ggn_only'][surv], _W['f_grid']))
+    floor     = np.median(asd_osc[~_W['peak_mask']])
+    asd_uldm  = np.sqrt(ls_psd(tg, _W['uldm_unit'][surv], _W['f_grid']))
+    uldm_peak = asd_uldm[_W['uldm_mask']].max()
+    return i_p, floor, D_REF * floor / uldm_peak     # peak scales as d/D_REF
+
+# ── main ───────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    lower1 = arm_positions(0,0,upper=False);  upper1 = arm_positions(0,0,upper=True)
+    lower2 = arm_positions(delta_r,delta_r,upper=False);  upper2 = arm_positions(delta_r,delta_r,upper=True)
+
+    # uniform cadence: precompute phases for all shots
+    t_all = np.arange(N_total) * T_cyc + T_fly
+    print("Computing phases for all shots...")
+    phases_all = np.zeros(N_total)
+    t0_phases = time.time()
+    for k in range(N_total):
+        if k % max(1, N_total // 200) == 0:
+            show_progress(k / N_total, t0_phases, 'phases')
+        t_abs = k * T_cyc + t_local
+        h_k   = h_0 + A*np.cos(2*np.pi*f_sig*t_abs)
+        pd1   = V(upper1, h_k) - V(lower1, h_k)
+        pd2   = V(upper2, h_k) - V(lower2, h_k)
+        phases_all[k] = ((m_atom/hbar)*np.trapezoid(pd1-pd2, t_local)
+                         + uldm_phase(t_all[k]))
+    show_progress(1.0, t0_phases, 'phases')
+
+    # frequency grid and signal windows
+    f_nyq  = 1/(2*T_cyc)
+    f_grid = np.linspace(0.5/(N_total*T_cyc), f_nyq + 0.05, 8000)
+    uldm_mask = (f_grid >= f_uldm - 0.01) & (f_grid <= f_uldm + 0.01)
+    peak_mask = ((f_grid >= f_sig - 0.02) & (f_grid <= f_sig + 0.02)) | uldm_mask
+
+    uldm_unit = uldm_phase(t_all)            # d = D_REF ULDM phase for every shot
+    ggn_only  = phases_all - uldm_unit       # oscillator signal alone
+
+    # tasks: every (p, realisation) pair with its own seed
+    p_scan = np.linspace(P_MIN, P_MAX, N_P)
+    seeds  = np.random.SeedSequence(SEED).spawn(N_P * N_real)
+    tasks  = [(i, p_scan[i], seeds[i*N_real + j]) for i in range(N_P) for j in range(N_real)]
+
+    print(f"\nAveraging noise floor and d_min over {N_real} realisations per p value "
+          f"on {N_WORKERS} workers...")
+    fl = [[] for _ in range(N_P)];  dm = [[] for _ in range(N_P)]
+    t0_scan = time.time()
+    with ProcessPoolExecutor(max_workers=N_WORKERS, initializer=_init_worker,
+                             initargs=(t_all, ggn_only, uldm_unit, f_grid,
+                                       peak_mask, uldm_mask)) as pool:
+        futures = [pool.submit(one_realisation, t) for t in tasks]
+        for n_done, fut in enumerate(as_completed(futures), start=1):
+            i_p, floor, d_min = fut.result()
+            if not np.isnan(d_min):
+                fl[i_p].append(floor);  dm[i_p].append(d_min)
+            show_progress(n_done / len(tasks), t0_scan, f'{n_done}/{len(tasks)} realisations')
+    show_progress(1.0, t0_scan, 'scan done')
+
+    d_min_scan = np.array([np.mean(v) if v else np.nan for v in dm])
+    d_min_std  = np.array([np.std(v, ddof=1) if len(v) > 1 else 0.0 for v in dm])
+
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.fill_between(100*p_scan, np.maximum(d_min_scan - d_min_std, 0.0), d_min_scan + d_min_std,
+                    color='#1f4e9c', alpha=0.2, lw=0)                    # mean +/- 1 std dev over realisations
+    ax.scatter(100*p_scan, d_min_scan, color='#1f4e9c', s=8, zorder=3)   # blue: ULDM quantity
+
+    # fit d_min = a*sqrt(p) + b
+    _valid = ~np.isnan(d_min_scan)
+    _X = np.column_stack([np.sqrt(p_scan[_valid]), np.ones(_valid.sum())])
+    _a, _b = np.linalg.lstsq(_X, d_min_scan[_valid], rcond=None)[0]
+    p_fit = np.linspace(0, p_scan.max(), 300)
+    ax.plot(100*p_fit, _a*np.sqrt(p_fit) + _b, 'k--', lw=1.0, zorder=4,
+            label=rf'$d_{{\mathrm{{min}}}} = {_a:.3g}\sqrt{{p}} + {_b:.3g}$')
+    ax.set_xlim(0, 100*p_scan.max())
+    ax.set_xlabel('Missed shots [%]', fontsize=12)
+    ax.set_ylabel(r'$d_{\mathrm{min}}$', fontsize=12)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=8, loc='upper left', frameon=False)
+    fig.tight_layout()
+
+    plt.show()

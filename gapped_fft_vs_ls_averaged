@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 # ── parameters ─────────────────────────────────────────────────────────────────
 T_cyc    = 2.0                     # uniform cycle time [s]
-N_total  = int(1e6 / T_cyc)        # total shots attempted (total run time ~1e6 s)
+N_total  = int(1e3 / T_cyc)        # total shots attempted (total run time ~1e6 s)
 p_fail   = 0.01      # probability of a shot failing
 N_real   = 20         # realisations averaged per p value in fig 5
 rng_seed = 42
@@ -148,42 +148,42 @@ fig.suptitle(f'Gapped uniform cadence: $N_\\mathrm{{total}}={N_total}$, '
              f'$T_\\mathrm{{cyc}}={T_cyc}$ s — Lomb-Scargle', fontsize=12)
 fig.tight_layout()
 
-# ── figure 2: d_min averaged over multiple realisations (disabled for now) ────
+# ── figure 2: d_min averaged over multiple realisations ───────────────────────
 # ULDM peak ASD scales linearly with d, so d_min = noise_floor / uldm_peak(d=1)
-# p_scan    = np.linspace(0, 0.05, 200)
-# rng_avg   = np.random.default_rng(99)
-# d_min_avg = []
-# print(f"\nAveraging d_min over {N_real} realisations per p value...")
-# for p in p_scan:
-#     vals = []
-#     for _ in range(N_real):
-#         surv = rng_avg.random(N_total) >= p
-#         tg   = t_all[surv]
-#         pg   = phases_all[surv]
-#         if len(tg) < 10:
-#             continue
-#         S         = ls_psd(tg, pg, f_grid)
-#         asd       = np.sqrt(S)
-#         floor     = np.median(asd[~_peak_mask])
-#         uldm_peak = asd[_mask_uldm_peak].max()
-#         vals.append(floor / uldm_peak)
-#     d_min_avg.append(np.mean(vals) if vals else np.nan)
-#
-# d_min_avg = np.array(d_min_avg)
-#
-# _valid = ~np.isnan(d_min_avg)
-# _X = np.column_stack([np.sqrt(p_scan[_valid]), np.ones(_valid.sum())])
-# _a, _b = np.linalg.lstsq(_X, d_min_avg[_valid], rcond=None)[0]
-# p_fit = np.linspace(0, p_scan.max(), 300)
-#
-# fig2, ax2 = plt.subplots(figsize=(8, 4))
-# ax2.scatter(100*p_scan, d_min_avg, color='firebrick', s=8)
-# ax2.plot(100*p_fit, _a*np.sqrt(p_fit) + _b, color='steelblue', lw=1.5,
-#          label=rf'$d_{{\rm min}} = {_a:.3f}\sqrt{{p}} + {_b:.3f}$')
-# ax2.legend(fontsize=10)
-# ax2.set_xlabel('Missed shots [%]', fontsize=16)
-# ax2.set_ylabel(r'$d_{\rm min}$', fontsize=16)
-# ax2.set_title(rf'$d_{{\rm min}}$ averaged over {N_real} realisations per $p$', fontsize=12)
-# fig2.tight_layout()
+p_scan    = np.linspace(0, 0.05, 200)
+rng_avg   = np.random.default_rng(99)
+d_min_avg = []
+print(f"\nAveraging d_min over {N_real} realisations per p value...")
+for p in p_scan:
+    vals = []
+    for _ in range(N_real):
+        surv = rng_avg.random(N_total) >= p
+        tg   = t_all[surv]
+        pg   = phases_all[surv]
+        if len(tg) < 10:
+            continue
+        S         = ls_psd(tg, pg, f_grid)
+        asd       = np.sqrt(S)
+        floor     = np.median(asd[~_peak_mask])
+        uldm_peak = asd[_mask_uldm_peak].max()
+        vals.append(floor / uldm_peak)
+    d_min_avg.append(np.mean(vals) if vals else np.nan)
+
+d_min_avg = np.array(d_min_avg)
+
+_valid = ~np.isnan(d_min_avg)
+_X = np.column_stack([np.sqrt(p_scan[_valid]), np.ones(_valid.sum())])
+_a, _b = np.linalg.lstsq(_X, d_min_avg[_valid], rcond=None)[0]
+p_fit = np.linspace(0, p_scan.max(), 300)
+
+fig2, ax2 = plt.subplots(figsize=(8, 4))
+ax2.scatter(100*p_scan, d_min_avg, color='firebrick', s=8)
+ax2.plot(100*p_fit, _a*np.sqrt(p_fit) + _b, color='steelblue', lw=1.5,
+         label=rf'$d_{{\rm min}} = {_a:.3f}\sqrt{{p}} + {_b:.3f}$')
+ax2.legend(fontsize=10)
+ax2.set_xlabel('Missed shots [%]', fontsize=16)
+ax2.set_ylabel(r'$d_{\rm min}$', fontsize=16)
+ax2.set_title(rf'$d_{{\rm min}}$ averaged over {N_real} realisations per $p$', fontsize=12)
+fig2.tight_layout()
 
 plt.show()
