@@ -17,7 +17,7 @@ import numpy as np
 # ── parameters to set ──────────────────────────────────────────────────────────
 N              = 1000000          # number of cycles
 DELTAS         = [0.3]   # jitter half-width(s) [s]
-N_REALISATIONS = 10                # jitter draws to average over
+N_REALISATIONS = 3                # jitter draws to average over
 
 # ── constants (AICE params from fig2_final.py) ─────────────────────────────────
 m_atom = 1.46e-25;  hbar = 1.055e-34
