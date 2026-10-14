@@ -318,8 +318,8 @@ def plot_stacked(n, log_y):
     # delta = 0 (top panel): label the main peak, the 2f_0 peak and both aliases
     f_top, sp_top = spectra[0]
     for f_t, label, off, ha in [(f_sig,           r'$f_0$',        (-3, 6), 'right'),
-                                (2 * f_sig,       r'$2f_0$',       (4, 6),  'left'),
-                                (f_s - 2 * f_sig, r'$2f_0$ (alias)', (-4, 6), 'right'),
+                                (2 * f_sig,       r'$2f_0$',       (0, 6),  'center'),
+                                (f_s - 2 * f_sig, r'$2f_0$ (alias)', (0, 6), 'center'),
                                 (f_s - f_sig,     r'$f_0$ (alias)', (4, 6), 'left')]:
         near = np.abs(f_top - f_t) < 0.002
         y_t = sp_top[near].max()
