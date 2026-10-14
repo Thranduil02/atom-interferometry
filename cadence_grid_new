@@ -14,7 +14,8 @@ Figures: linear y, log y, and both again with 1e-5 rad/sqrt(Hz) shot noise.
 Also: log grids with the delta = 0 row recomputed by FFT / by a coarse-grid LS
 (signposted on the panels). Also saved: stacked_jitter_N{10000,100000}_{lin,log}.png, four delta panels
 (0, 0.1, 0.2, 0.3 s) per figure on a common y-axis, no noise, with the first
-alias (f_s - f_sig) shaded gold.
+alias (f_s - f_sig) shaded gold for delta > 0; the delta = 0 panel labels f_0,
+2f_0 and their aliases.
 
 Physics model (arm trajectories, point-mass potential, Lomb-Scargle estimator)
 reused from cadence_bragg_comparison / fig2_final.py.
@@ -281,7 +282,6 @@ STACK_DELTAS = [0.0, 0.1, 0.2, 0.3]
 STACK_NS     = [10_000, 100_000]
 F_ALIAS      = f_s - f_sig        # first alias of the oscillator, ~0.132 Hz
 ALIAS_PER_S  = 0.05               # alias-band half-width per second of jitter [Hz/s]
-ALIAS_MIN    = 0.003              # half-width floor so the delta = 0 line is visible [Hz]
 
 def get_spectrum(d, n):
     """Clean LS spectrum for (delta, N), reusing the grid above when available."""
@@ -301,9 +301,9 @@ def plot_stacked(n, log_y):
                             sharex=True, sharey=True)
     for ax, d, (f_g, sp) in zip(axs, STACK_DELTAS, spectra):
         ax.plot(f_g, sp, color=COLORS['fundamental'], lw=0.8, zorder=4)
-        ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
-        half = max(ALIAS_MIN, ALIAS_PER_S * d)    # jitter smears the alias line
-        ax.axvspan(F_ALIAS - half, F_ALIAS + half, color='gold', alpha=0.3, lw=0, zorder=0)
+        if d:                                     # delta = 0: the alias is a sharp line, no band
+            half = ALIAS_PER_S * d                    # jitter smears the alias line
+            ax.axvspan(F_ALIAS - half, F_ALIAS + half, color='gold', alpha=0.3, lw=0, zorder=0)
         pm = r'\pm' if d else ''
         ax.text(0.98, 0.9, rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$', transform=ax.transAxes,
                 fontsize=11, ha='right', va='top')
@@ -311,12 +311,22 @@ def plot_stacked(n, log_y):
     if log_y:
         axs[0].set_yscale('log')
         axs[0].set_ylim(STACK_LOG_FLOOR, 3 * ymax)
-        f_N_y = 3 * ymax * 0.3
     else:
-        axs[0].set_ylim(0, 1.1 * ymax)
-        f_N_y = 1.1 * ymax * 0.5
+        axs[0].set_ylim(0, 1.25 * ymax)
     axs[0].set_xlim(F_LO, F_HI)
-    axs[0].text(f_N, f_N_y, r'  $f_N$', fontsize=9, ha='left', va='center')
+
+    # delta = 0 (top panel): label the main peak, the 2f_0 peak and both aliases
+    f_top, sp_top = spectra[0]
+    for f_t, label, off, ha in [(f_sig,           r'$f_0$',        (-3, 6), 'right'),
+                                (2 * f_sig,       r'$2f_0$',       (4, 6),  'left'),
+                                (f_s - 2 * f_sig, r'$f_s - 2f_0$', (-4, 6), 'right'),
+                                (f_s - f_sig,     r'$f_s - f_0$',  (4, 6),  'left')]:
+        near = np.abs(f_top - f_t) < 0.002
+        y_t = sp_top[near].max()
+        axs[0].scatter([f_top[near][sp_top[near].argmax()]], [y_t], color=COLORS['fundamental'],
+                       s=7, zorder=5)
+        axs[0].annotate(label, (f_t, y_t), textcoords='offset points', xytext=off,
+                        ha=ha, fontsize=9, color=COLORS['fundamental'])
     axs[-1].set_xlabel(X_LABEL, fontsize=12)
     fig.supylabel(Y_LABEL, fontsize=12)
     fig.tight_layout()
