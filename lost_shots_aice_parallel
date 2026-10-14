@@ -29,6 +29,7 @@ from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 # ── parameters ─────────────────────────────────────────────────────────────────
 T_total  = 1e6        # total observation time [s]
@@ -193,8 +194,8 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
     ax.fill_between(100*p_scan, np.maximum(d_min_scan - d_min_std, 0.0), d_min_scan + d_min_std,
-                    color='#1f4e9c', alpha=0.2, lw=0)                    # mean +/- 1 std dev over realisations
-    ax.scatter(100*p_scan, d_min_scan, color='#1f4e9c', s=8, zorder=3)   # blue: ULDM quantity
+                    color='#c1272d', alpha=0.2, lw=0)                    # mean +/- 1 std dev over realisations
+    ax.scatter(100*p_scan, d_min_scan, color='#c1272d', s=8, zorder=3)   # red, as in the other figures
 
     # fit d_min = a*sqrt(p) + b
     _valid = ~np.isnan(d_min_scan)
@@ -207,6 +208,7 @@ if __name__ == "__main__":
     ax.set_xlabel('Missed shots [%]', fontsize=12)
     ax.set_ylabel(r'$d_{\mathrm{min}}$', fontsize=12)
     ax.tick_params(labelsize=11)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: '0' if v == 0 else f'{v:g}'))   # 0, not 0.0000
     ax.legend(fontsize=8, loc='upper left', frameon=False)
     fig.tight_layout()
 

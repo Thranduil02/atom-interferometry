@@ -16,12 +16,13 @@ import time
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 # ── parameters ─────────────────────────────────────────────────────────────────
-T_total  = 1e6        # total observation time [s]
+T_total  = 1e4        # total observation time [s]
 T_cyc    = 5.0        # uniform cycle time [s]
 N_total  = int(T_total / T_cyc)   # total shots attempted
-N_real   = 10         # realisations averaged per p value in the d_min scan
+N_real   = 50         # realisations averaged per p value in the d_min scan
 P_MIN    = 0.0        # lost-shot fraction scan: from ...
 P_MAX    = 0.05       #   ... to (0.05 = 5 %)
 N_P      = 50        #   number of p values
@@ -172,8 +173,8 @@ show_progress(1.0, t0_scan, 'scan done')
 fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
 _mean, _std = np.array(d_min_scan), np.array(d_min_std)
 ax.fill_between(100*p_scan, np.maximum(_mean - _std, 0.0), _mean + _std,
-                 color='#1f4e9c', alpha=0.2, lw=0)                        # mean +/- 1 std dev over realisations
-ax.scatter(100*p_scan, d_min_scan, color='#1f4e9c', s=8, zorder=3)   # blue: ULDM quantity
+                 color='#c1272d', alpha=0.2, lw=0)                        # mean +/- 1 std dev over realisations
+ax.scatter(100*p_scan, d_min_scan, color='#c1272d', s=8, zorder=3)   # red, as in the other figures
 
 # fit d_min = a*sqrt(p) + b
 _valid = ~np.isnan(d_min_scan)
@@ -186,6 +187,7 @@ ax.set_xlim(0, 100*p_scan.max())
 ax.set_xlabel('Missed shots [%]', fontsize=12)
 ax.set_ylabel(r'$d_{\mathrm{min}}$', fontsize=12)
 ax.tick_params(labelsize=11)
+ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: '0' if v == 0 else f'{v:g}'))   # 0, not 0.0000
 ax.legend(fontsize=8, loc='upper left', frameon=False)
 fig.tight_layout()
 
