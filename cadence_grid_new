@@ -319,8 +319,8 @@ def plot_stacked(n, log_y):
     f_top, sp_top = spectra[0]
     for f_t, label, off, ha in [(f_sig,           r'$f_0$',        (-3, 6), 'right'),
                                 (2 * f_sig,       r'$2f_0$',       (4, 6),  'left'),
-                                (f_s - 2 * f_sig, r'$f_s - 2f_0$', (-4, 6), 'right'),
-                                (f_s - f_sig,     r'$f_s - f_0$',  (4, 6),  'left')]:
+                                (f_s - 2 * f_sig, r'$2f_0$ (alias)', (-4, 6), 'right'),
+                                (f_s - f_sig,     r'$f_0$ (alias)', (4, 6), 'left')]:
         near = np.abs(f_top - f_t) < 0.002
         y_t = sp_top[near].max()
         axs[0].scatter([f_top[near][sp_top[near].argmax()]], [y_t], color=COLORS['fundamental'],
