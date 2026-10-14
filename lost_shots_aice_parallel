@@ -32,10 +32,10 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 # ── parameters ─────────────────────────────────────────────────────────────────
-T_total  = 1e6        # total observation time [s]
+T_total  = 1e4        # total observation time [s]
 T_cyc    = 5.0        # uniform cycle time [s]
 N_total  = int(T_total / T_cyc)   # total shots attempted
-N_real   = 10         # realisations averaged per p value in the d_min scan
+N_real   = 50         # realisations averaged per p value in the d_min scan
 P_MIN    = 0.0        # lost-shot fraction scan: from ...
 P_MAX    = 0.05       #   ... to (0.05 = 5 %)
 N_P      = 50         #   number of p values
