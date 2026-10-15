@@ -4,10 +4,10 @@ Lomb-Scargle periodograms at 1 % and 10 % lost shots, with the AICE parameters o
 fig2_final.py -- the first figure of gapped_fft_vs_ls_averaged, redone for AICE.
 
 Uniform cadence (T_cyc = 5 s) with each cycle independently failing with
-probability p. The vertical-oscillator GGN signal (f0 = 0.02 Hz, as in
-lost_shots_aice) is sampled on every shot, with no ULDM tone; the periodograms use
-only the surviving timestamps. The frequency axis runs a little past Nyquist
-(0.1 Hz), which Lomb-Scargle handles on gapped data.
+probability p. The vertical-oscillator GGN signal (f0 = 0.05 Hz)
+is sampled on every shot, with no ULDM tone; the periodograms use
+only the surviving timestamps. The frequency axis runs up to the Nyquist
+frequency, 0.1 Hz.
 """
 import time
 
@@ -26,7 +26,7 @@ rng_seed = 42
 m_atom = 1.46e-25;  hbar = 1.055e-34
 v_kick = 1000 * hbar * (2*np.pi / 698e-9) / m_atom
 G = 6.67e-11;  g = 9.81;  M = 1;  h_0 = 1;  D_0 = 3;  A = 0.5
-f_sig = 0.02
+f_sig = 0.05
 u0 = 24.5;  dt = 0.01;  T = 2.5
 T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
 
@@ -100,7 +100,7 @@ show_progress(1.0, t0_phases, 'phases')
 
 # ── Lomb-Scargle on the surviving shots, one panel per failure rate ────────────
 f_nyq  = 1/(2*T_cyc)
-f_grid = np.linspace(0.5/(N_total*T_cyc), f_nyq + 0.05, 8000)
+f_grid = np.linspace(0.5/(N_total*T_cyc), f_nyq, 8000)
 
 spectra = []
 t0_ls = time.time()
