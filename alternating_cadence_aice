@@ -17,6 +17,7 @@ Physics model (arm trajectories, point-mass potential, Lomb-Scargle estimator)
 reused from cadence_grid_new / fig2_final.py.
 """
 
+import os
 import time
 
 import numpy as np
@@ -24,11 +25,13 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 
 # ── parameters ─────────────────────────────────────────────────────────────────
-T_A, T_B = 5.5, 6.0      # alternating cycle times [s]
+T_A, T_B = 5, 5.5     # alternating cycle times [s]
 T_SPAN   = int(1e6)       # total span [s]
 F_SIG    = 0.05          # oscillator frequency [Hz]
 F_LO, F_HI = 1e-3, 0.2   # frequency range [Hz]
-STACK_PAIRS = [(T_A, T_B), (5.0, 7.0)]   # figure 2 panels, top to bottom; the first is figure 1's
+N_HARM, N_SIDE = 4, 6     # harmonics h*f_sig and sideband orders k that get zoom windows
+PEAK_FRAC = 0.01         # figure 2 puts a dot on every peak taller than this fraction of the tallest
+STACK_PAIRS = [(T_A, T_B), (5.0, 8.0)]   # figure 2 panels, top to bottom; the first is figure 1's
 
 # ── constants (AICE params from fig2_final.py) ─────────────────────────────────
 m_atom = 1.46e-25;  hbar = 1.055e-34
@@ -40,7 +43,7 @@ dt = 0.01
 delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
 
 # source (fig2_final src_common), vertical linear oscillator
-M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
+M, D_0, h_0, A = 1.0, 3.0, 2.0, 1.0
 
 T_fly = 2 * T
 N_fly = int(round(T_fly / dt))
@@ -166,11 +169,13 @@ def alternating_spectrum(t_a, t_b, idx=0, n_spectra=1):
     t_meas  = alternating_cadence(T_SPAN, t_a, t_b)
     print(chr(13) + f"T = {t_a:g}/{t_b:g} s: {len(t_meas):,} cycles, T_super = {T_super:g} s, "
           f"mean cadence {T_super/2:g} s (f_s = {2/T_super:.4f} Hz)" + " " * 40, flush=True)
-    # Bragg sidebands at f_sig +/- k/T_super (folded into [F_LO, F_HI])
+    # Bragg sidebands h*f_sig +/- k/T_super of the oscillator and its harmonics h = 1..N_HARM
+    # (folded into [F_LO, F_HI]). Every line is only ~1/T_span wide, so each one needs a
+    # zoom window in the frequency grid or a coarse grid reads its height too low.
     bragg_centers = sorted({
-        fc for k in range(6)
-        for fc in (F_SIG + k / T_super, abs(F_SIG - k / T_super))
-        if F_LO <= fc <= F_HI
+        round(abs(h * F_SIG + k / T_super), 9)
+        for h in range(1, N_HARM + 1) for k in range(-N_SIDE, N_SIDE + 1)
+        if F_LO <= abs(h * F_SIG + k / T_super) <= F_HI
     })
     f_grid = freq_grid(F_LO, F_HI, t_meas, f_centers=bragg_centers)
     y = phases_for(t_meas - T_fly, progress=bar(0.0, PHASE_SHARE))
@@ -198,20 +203,45 @@ fig.tight_layout()
 # ── figure 2: two stacked panels, one common y-axis ────────────────────────────
 stack_spectra = [spec_main] + [alternating_spectrum(a, b, idx=i, n_spectra=N_SPECTRA)
                                for i, (a, b) in enumerate(STACK_PAIRS) if i > 0]
-y_top = 1.1 * max(sp[1].max() for sp in stack_spectra)
+y_top = 1.4 * max(sp[1].max() for sp in stack_spectra)   # headroom for the text above the peaks
 
-fig2, axs = plt.subplots(len(STACK_PAIRS), 1, figsize=(6.5, 4.2 * len(STACK_PAIRS) / 1.5),
-                         dpi=200, sharex=True, sharey=True)
+def find_peaks_simple(f, asd, rel=PEAK_FRAC, merge=0.003):
+    """Peaks of the spectrum: local maxima above rel * the tallest, with maxima closer than
+    `merge` Hz collapsed to the tallest (drops the sinc sidelobes beside each line)."""
+    i = np.flatnonzero((asd[1:-1] > asd[:-2]) & (asd[1:-1] >= asd[2:]) &
+                       (asd[1:-1] >= rel * asd.max())) + 1
+    i = i[np.argsort(asd[i])[::-1]]                 # tallest first
+    kept = []
+    for j in i:
+        if all(abs(f[j] - f[k]) > merge for k in kept):
+            kept.append(j)
+    return sorted(kept)
+
+# two-column-paper size: tall and narrow (one column is ~3.4 in wide)
+fig2, axs = plt.subplots(len(STACK_PAIRS), 1, figsize=(3.4, 2.7 * len(STACK_PAIRS)),
+                         sharex=True, sharey=True)
 for ax2, (a, b), (f_g, asd) in zip(axs, STACK_PAIRS, stack_spectra):
-    ax2.plot(f_g, asd, color=RED, lw=0.8)
-    ax2.text(0.98, 0.92, rf'$T = {a:g}\,/\,{b:g}\,\mathrm{{s}}$', transform=ax2.transAxes,
-             fontsize=11, ha='right', va='top')
-    ax2.tick_params(labelsize=11)
+    ax2.plot(f_g, asd, color=RED, lw=0.7)
+    ax2.text(0.98, 0.97, rf'$\Delta t_1 = {a:g}\,\mathrm{{s}},\ \Delta t_2 = {b:g}\,\mathrm{{s}}$',
+             transform=ax2.transAxes, fontsize=8, ha='right', va='top')
+    pk = find_peaks_simple(f_g, asd)
+    ax2.scatter(f_g[pk], asd[pk], color=RED, s=7, zorder=5)               # a dot on every peak
+    for lab, f_t, off, ha in ((r'$f_0$', F_SIG, (0, 5), 'center'),
+                              (r'$2f_0$', 2 * F_SIG, (-2, 5), 'right')):   # label f_0 and 2f_0
+        j = min(pk, key=lambda q: abs(f_g[q] - f_t))
+        ax2.axvline(f_g[j], color='k', ls=':', lw=0.5, alpha=0.5, zorder=1)   # dotted guide down to the axis
+        ax2.annotate(lab, (f_g[j], asd[j]), textcoords='offset points', xytext=off,
+                     ha=ha, fontsize=8, color=RED)
+    ax2.tick_params(labelsize=8)
     ax2.yaxis.set_major_formatter(zero_fmt)
 axs[0].set_xlim(F_LO, F_HI)
 axs[0].set_ylim(0, y_top)
-axs[-1].set_xlabel('$f$ [Hz]', fontsize=12)
-fig2.supylabel(Y_LABEL, fontsize=12)
-fig2.tight_layout()
+axs[-1].set_xlabel('$f$ [Hz]', fontsize=9)
+fig2.supylabel(Y_LABEL, fontsize=9, x=0.012)     # close to the tick labels
+fig2.subplots_adjust(left=0.2, right=0.955, top=0.985, bottom=0.085, hspace=0.1)   # wide plot area
+
+out_path = os.path.join(os.path.expanduser('~'), 'Desktop', 'alternating cadence aice.png')
+fig2.savefig(out_path, dpi=300)
+print(f"Figure 2 saved to {out_path}")
 
 plt.show()
