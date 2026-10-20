@@ -1,0 +1,217 @@
+"""
+Alternating (deterministic) cadence, Lomb-Scargle periodogram, with the AICE
+parameters of fig2_final.py -- the alternating-cadence panel of
+cadence_bragg_comparison, redone for AICE.
+
+Cycle times alternate T = 5.5, 6.0, 5.5, 6.0, ... s (T_A, T_B) for a total span
+T_SPAN. This periodic, non-random sampling pattern produces sharp aliasing
+sidebands at f_sig +/- k/T_super, where T_super = T_A + T_B = 11.5 s is the period
+of the alternation -- the analogue of Bragg diffraction peaks from a periodic
+lattice, as opposed to the diffuse floor that random jitter gives. The cycles must
+not overlap, so both times are >= the 5 s flight time (T_fly = 2T).
+
+Source: 1 kg at D = 3 m with 0.5 m vertical amplitude, oscillating at F_SIG
+(0.05 Hz, as in cadence_grid_new), gradiometer baseline 70 m, no noise.
+
+Physics model (arm trajectories, point-mass potential, Lomb-Scargle estimator)
+reused from cadence_grid_new / fig2_final.py.
+"""
+
+import time
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
+# ── parameters ─────────────────────────────────────────────────────────────────
+T_A, T_B = 5.5, 6.0      # alternating cycle times [s]
+T_SPAN   = int(1e6)       # total span [s]
+F_SIG    = 0.05          # oscillator frequency [Hz]
+F_LO, F_HI = 1e-3, 0.2   # frequency range [Hz]
+STACK_PAIRS = [(T_A, T_B), (5.0, 7.0)]   # figure 2 panels, top to bottom; the first is figure 1's
+
+# ── constants (AICE params from fig2_final.py) ─────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81
+u0 = 24.5          # launch speed [m/s]
+T = 2.5            # half-interferometer time [s]
+dt = 0.01
+delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
+
+# source (fig2_final src_common), vertical linear oscillator
+M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
+
+T_fly = 2 * T
+N_fly = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+assert min(T_A, T_B) >= T_fly, "cycles would overlap"
+assert STACK_PAIRS[0] == (T_A, T_B)
+
+# ── progress bar with ETA ──────────────────────────────────────────────────────
+def show_progress(frac, t0, label):
+    el  = time.time() - t0
+    eta = el * (1 - frac) / frac if frac > 0 else float('nan')
+    bar = '#' * int(30 * frac) + '-' * (30 - int(30 * frac))
+    print(chr(13) + f"[{bar}] {100*frac:5.1f}%  elapsed {el/60:6.1f} min  ETA {eta/60:6.1f} min  {label}   ",
+          end='', flush=True)
+    if frac >= 1:
+        print()
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    """Arm positions on the local [0, 2T) grid. Returns array of length N_fly."""
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(delta_r, delta_r, upper=False)
+upper2_loc = arm_positions(delta_r, delta_r, upper=True)
+
+# ── phase signal, vectorized over cycles in chunks to bound memory ─────────────
+def phases_for(t_starts, chunk=10_000, progress=None):
+    out = np.empty(len(t_starts))
+    for i0 in range(0, len(t_starts), chunk):
+        t_abs = t_starts[i0:i0 + chunk, None] + t_local[None, :]
+        h = h_0 + A * np.cos(2*np.pi * F_SIG * t_abs)
+        pd1 = V(upper1_loc, h) - V(lower1_loc, h)
+        pd2 = V(upper2_loc, h) - V(lower2_loc, h)
+        out[i0:i0 + chunk] = (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local, axis=1)
+        if progress:
+            progress(min(1.0, (i0 + chunk) / len(t_starts)))
+    return out
+
+# ── Lomb-Scargle periodogram, batched over frequency to bound memory ───────────
+def ls_psd(t, y, freqs, batch=200, progress=None):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2.
+    Only cos(wt) and sin(wt) are evaluated; the tau shift (a = w*tau) is applied
+    afterwards by rotating the sums Σc², Σs², Σcs, Σcy, Σsy."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    S = np.empty_like(freqs)
+    for i0 in range(0, len(freqs), batch):
+        f_b = freqs[i0:i0 + batch]
+        wt = np.outer(2 * np.pi * f_b, t)
+        c = np.cos(wt);  s = np.sin(wt)
+        Scc = np.einsum('ij,ij->i', c, c)
+        Sss = np.einsum('ij,ij->i', s, s)
+        Scs = np.einsum('ij,ij->i', c, s)
+        Yc = c @ y;  Ys = s @ y
+        a = 0.5 * np.arctan2(2 * Scs, Scc - Sss)          # w*tau
+        ca = np.cos(a);  sa = np.sin(a)
+        C = ca * Yc + sa * Ys
+        Sn = ca * Ys - sa * Yc
+        CC = ca**2 * Scc + sa**2 * Sss + 2 * ca * sa * Scs
+        SS = ca**2 * Sss + sa**2 * Scc - 2 * ca * sa * Scs
+        S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
+        if progress:
+            progress(min(1.0, (i0 + batch) / len(freqs)))
+    return S
+
+def freq_grid(f_lo, f_hi, t_meas, f_centers, n_coarse=4000, zoom_cycles=30, n_fine=300):
+    """Coarse grid over [f_lo, f_hi] plus finely-oversampled windows around each
+    frequency in f_centers (the peak linewidth is ~1/T_span, which a fixed
+    coarse grid undersamples)."""
+    coarse     = np.linspace(f_lo, f_hi, n_coarse)
+    half_width = zoom_cycles / (t_meas[-1] - t_meas[0])
+    pieces     = [coarse]
+    for fc in f_centers:
+        if f_lo <= fc <= f_hi:
+            pieces.append(np.linspace(max(f_lo, fc - half_width),
+                                       min(f_hi, fc + half_width), n_fine))
+    return np.unique(np.concatenate(pieces))
+
+# ── alternating cadence ────────────────────────────────────────────────────────
+def alternating_cadence(t_span, t_a, t_b):
+    T_cycles, total, toggle = [], 0.0, True
+    while total < t_span:
+        step = t_a if toggle else t_b
+        T_cycles.append(step)
+        total += step
+        toggle = not toggle
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+PHASE_SHARE = 0.03   # share of one spectrum's progress bar given to the phase calculation
+T0_PROGRESS = None
+
+def alternating_spectrum(t_a, t_b, idx=0, n_spectra=1):
+    """Periodogram (f_grid, sqrt(S) in urad/sqrt(Hz)) for cycle times alternating t_a, t_b.
+    idx / n_spectra place this spectrum on the overall progress bar."""
+    global T0_PROGRESS
+    if T0_PROGRESS is None:
+        T0_PROGRESS = time.time()
+    label = f'T = {t_a:g}/{t_b:g} s  (spectrum {idx+1}/{n_spectra})'
+    def bar(lo, hi):
+        return lambda fr: show_progress((idx + lo + (hi - lo) * fr) / n_spectra, T0_PROGRESS, label)
+    T_super = t_a + t_b   # period of the alternation
+    t_meas  = alternating_cadence(T_SPAN, t_a, t_b)
+    print(chr(13) + f"T = {t_a:g}/{t_b:g} s: {len(t_meas):,} cycles, T_super = {T_super:g} s, "
+          f"mean cadence {T_super/2:g} s (f_s = {2/T_super:.4f} Hz)" + " " * 40, flush=True)
+    # Bragg sidebands at f_sig +/- k/T_super (folded into [F_LO, F_HI])
+    bragg_centers = sorted({
+        fc for k in range(6)
+        for fc in (F_SIG + k / T_super, abs(F_SIG - k / T_super))
+        if F_LO <= fc <= F_HI
+    })
+    f_grid = freq_grid(F_LO, F_HI, t_meas, f_centers=bragg_centers)
+    y = phases_for(t_meas - T_fly, progress=bar(0.0, PHASE_SHARE))
+    S = ls_psd(t_meas, y, f_grid, progress=bar(PHASE_SHARE, 1.0))
+    return f_grid, np.sqrt(S) * 1e6
+
+# ── plot style (fig2_final.py) ─────────────────────────────────────────────────
+Y_LABEL = r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]'
+RED = '#c1272d'
+zero_fmt = FuncFormatter(lambda v, _: '0' if v == 0 else f'{v:g}')   # 0, not 0.0
+
+# ── figure 1: T = T_A / T_B ────────────────────────────────────────────────────
+N_SPECTRA = len(STACK_PAIRS)
+spec_main = alternating_spectrum(T_A, T_B, idx=0, n_spectra=N_SPECTRA)
+fig, ax = plt.subplots(figsize=(6.5, 4), dpi=200)
+ax.plot(spec_main[0], spec_main[1], color=RED, lw=0.8)
+ax.set_xlim(F_LO, F_HI)
+ax.set_ylim(bottom=0)
+ax.set_xlabel('$f$ [Hz]', fontsize=12)
+ax.set_ylabel(Y_LABEL, fontsize=12)
+ax.tick_params(labelsize=11)
+ax.yaxis.set_major_formatter(zero_fmt)
+fig.tight_layout()
+
+# ── figure 2: two stacked panels, one common y-axis ────────────────────────────
+stack_spectra = [spec_main] + [alternating_spectrum(a, b, idx=i, n_spectra=N_SPECTRA)
+                               for i, (a, b) in enumerate(STACK_PAIRS) if i > 0]
+y_top = 1.1 * max(sp[1].max() for sp in stack_spectra)
+
+fig2, axs = plt.subplots(len(STACK_PAIRS), 1, figsize=(6.5, 4.2 * len(STACK_PAIRS) / 1.5),
+                         dpi=200, sharex=True, sharey=True)
+for ax2, (a, b), (f_g, asd) in zip(axs, STACK_PAIRS, stack_spectra):
+    ax2.plot(f_g, asd, color=RED, lw=0.8)
+    ax2.text(0.98, 0.92, rf'$T = {a:g}\,/\,{b:g}\,\mathrm{{s}}$', transform=ax2.transAxes,
+             fontsize=11, ha='right', va='top')
+    ax2.tick_params(labelsize=11)
+    ax2.yaxis.set_major_formatter(zero_fmt)
+axs[0].set_xlim(F_LO, F_HI)
+axs[0].set_ylim(0, y_top)
+axs[-1].set_xlabel('$f$ [Hz]', fontsize=12)
+fig2.supylabel(Y_LABEL, fontsize=12)
+fig2.tight_layout()
+
+plt.show()
