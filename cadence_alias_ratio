@@ -44,9 +44,9 @@ T_nom = 5.5                    # nominal cycle; >= T_fly + max jitter
 f_s   = 1.0 / T_nom
 f_alias = f_s - f_sig          # first alias of the oscillator
 
-DELTAS  = [0.0, 0.1, 0.2, 0.3]
-N_STEP  = 10000
-Ns      = list(range(1_000, int(1e6), N_STEP))
+DELTAS  = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+N_STEP  = 1000
+Ns      = list(range(1_000, int(10000), N_STEP))
 N_SEEDS = 20
 
 OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
@@ -178,12 +178,15 @@ for d in DELTAS:
 # ── fit the jittered curves to a + b/sqrt(N) (linear least squares in 1/sqrt(N)) ──
 Ns_arr = np.array(Ns, dtype=float)
 fits = {}     # delta -> (a, b)
+fit_errs = {} # delta -> (sigma_a, sigma_b), 1-sigma from the least-squares covariance
 for d in DELTAS:
     if d == 0:
         continue
-    b, a = np.polyfit(1 / np.sqrt(Ns_arr), ratios[d][0], 1)
+    (b, a), cov = np.polyfit(1 / np.sqrt(Ns_arr), ratios[d][0], 1, cov=True)
+    da, db = np.sqrt(cov[1, 1]), np.sqrt(cov[0, 0])
     fits[d] = (a, b)
-    print(f"delta = {d:g} s fit: a = {a:.4f}, b = {b:.3f}  (ratio = a + b/sqrt(N))")
+    fit_errs[d] = (da, db)
+    print(f"delta = {d:g} s fit: a = {a:.4f} +/- {da:.4f}, b = {b:.3f} +/- {db:.3f}  (ratio = a + b/sqrt(N))")
 
 # ── plot (style of fig2_final.py) ──────────────────────────────────────────────
 # delta = 0 in the fig2_final red; the jittered deltas are spread along viridis,
