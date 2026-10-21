@@ -21,7 +21,9 @@ each periodogram panel instead of shown separately.
 
   (d) Line plot (not a bar chart): the ratio of the 2f0 peak to the f0 peak
       (both folded), for a circle inclined at theta = 0, 5, 10, ..., 360
-      deg. A horizontal circle's height never changes, so its motion is a
+      deg, tilting the circle about the D axis (the atoms-to-source line):
+      0 deg is the D-w (horizontal) plane, 90 deg the D-h (vertical) plane.
+      A horizontal circle's height never changes, so its motion is a
       pure cos(phi) in D -- its comb is symmetric and 2f0/f0 is small. A
       vertical circle modulates height and horizontal distance out of
       phase, which mixes more power into 2f0. Sweeping the full 0-360 deg
@@ -29,7 +31,7 @@ each periodogram panel instead of shown separately.
       every 180 deg, which is a useful internal sanity check.
 
 A second, separate figure extends panel (c): it overlays the folded combs
-of the horizontal (incline=0) and vertical (incline=90) circles, both at
+of the horizontal (incline=0, D-w plane) and vertical (incline=90, D-h plane) circles, both at
 F_CIRC, on the same log-scale periodogram axes (no ULDM tone plotted here),
 colour-coded so the two geometries' harmonic content can be compared
 directly.
@@ -162,14 +164,17 @@ def traj_linear(t_abs, p):
     return p['h0'] + p['amp'] * np.cos(ph), p['D']
 
 def traj_inclined_circle(t_abs, p):
-    """Circle tilted by alpha out of the horizontal. alpha = 0 -> pure
-    horizontal circle (height fixed); alpha = 90 -> pure vertical circle."""
+    """Circle centred at (D, 0, h0), tilted by alpha about the D axis (the
+    horizontal line from the atoms to the source). Axes: D = along that line,
+    w = horizontal and perpendicular to it, h = vertical.
+    alpha = 0  -> circle in the D-w plane (horizontal, height fixed);
+    alpha = 90 -> circle in the D-h plane (vertical, w = 0)."""
     ph    = 2 * np.pi * p['f'] * t_abs
     alpha = np.deg2rad(p['incline_deg'])
-    x = p['D'] + p['amp'] * np.cos(alpha) * np.cos(ph)
-    y = p['amp'] * np.sin(ph)
-    h = p['h0'] + p['amp'] * np.sin(alpha) * np.cos(ph)
-    return h, np.sqrt(x*x + y*y)
+    x = p['D'] + p['amp'] * np.cos(ph)                    # D coordinate
+    w = p['amp'] * np.cos(alpha) * np.sin(ph)
+    h = p['h0'] + p['amp'] * np.sin(alpha) * np.sin(ph)
+    return h, np.sqrt(x*x + w*w)
 
 def compute_phases(src, chunk=25_000):
     phases = np.empty(N_cycles)
@@ -407,9 +412,9 @@ if __name__ == "__main__":
     ax2.set_ylim(y_min2, y_max2)
     ax2.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
     ax2.plot(f_k, urad_horiz, color=COLOR_HORIZ, lw=0.5, alpha=0.5,
-             label='horizontal circle (incline=0°)')
+             label='horizontal circle (incline=0°, D-w plane)')
     ax2.plot(f_k, urad_vert, color=COLOR_VERT, lw=0.5, alpha=0.5,
-             label='vertical circle (incline=90°)')
+             label='vertical circle (incline=90°, D-h plane)')
 
     for rows_geom, col in ((rows_horiz, COLOR_HORIZ), (rows_vert, COLOR_VERT)):
         for k, f_true, f_fold, peak, f_bin in rows_geom:
