@@ -13,11 +13,12 @@ uniform sampling (a single realisation, ratio ~1).
 import time
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 # ── parameters to set ──────────────────────────────────────────────────────────
-N              = 1000000          # number of cycles
+N              = 10000          # number of cycles
 DELTAS         = [0.3]   # jitter half-width(s) [s]
-N_REALISATIONS = 3                # jitter draws to average over
+N_REALISATIONS = 5000                # jitter draws to average over
 
 # ── constants (AICE params from fig2_final.py) ─────────────────────────────────
 m_atom = 1.46e-25;  hbar = 1.055e-34
@@ -134,8 +135,38 @@ def peak_ratio(delta, n, seed):
     alias = np.sqrt(ls_psd(t_m, y, f_ali)).max()
     return alias / main
 
+# ── jitter of every individual cycle in the sequence ──────────────────────────
+# One sequence (seed 0). Figure 1: each of the N cycles as its own point (x = cycle
+# number, y = that cycle's jitter T_c - T_nom). Figure 2: histogram of those values
+# (x = jitter, y = number of cycles); dashed = the drawn Uniform(-delta, +delta).
+jit_deltas = [d for d in DELTAS if d]
+for d in jit_deltas:
+    dev = np.diff(random_cadence(d, N + 1, seed=0)) - T_nom        # N per-cycle jitters
+    print(f"delta = {d:g} s, N = {N:,}: jitter mean = {dev.mean():+.4f} s, std = {dev.std():.4f} s "
+          f"(uniform expectation {d/np.sqrt(3):.4f}), range = [{dev.min():+.4f}, {dev.max():+.4f}] s")
+
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.scatter(np.arange(1, N + 1), dev, s=1.5, color='#c1272d', alpha=0.6, lw=0, rasterized=True)
+    ax.set_xlim(0, N);  ax.set_ylim(-1.15 * d, 1.15 * d)
+    ax.set_xlabel('cycle number', fontsize=12)
+    ax.set_ylabel(r'jitter $T_c - T_{\mathrm{nom}}$ [s]', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N:,}$', fontsize=11)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    counts, edges, _ = ax.hist(dev, bins=40, range=(-d, d), color='#c1272d', alpha=0.8)
+    ax.plot([-d, -d, d, d], [0, N*(edges[1]-edges[0])/(2*d), N*(edges[1]-edges[0])/(2*d), 0],
+            '--', color='k', lw=0.8)
+    ax.set_xlabel(r'jitter $T_c - T_{\mathrm{nom}}$ [s]', fontsize=12)
+    ax.set_ylabel('number of cycles', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N:,}$', fontsize=11)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
 # ── ratio at a single N ────────────────────────────────────────────────────────
 t_start = time.time()
+all_vals = {}   # delta -> ratio from each realisation
 for d in DELTAS:
     seeds = [0] if d == 0 else list(range(N_REALISATIONS))
     vals = np.empty(len(seeds))
@@ -143,6 +174,25 @@ for d in DELTAS:
         el = time.time() - t_start
         print(chr(13) + f"delta={d:g}  draw {j+1}/{len(seeds)}  elapsed {el/60:.1f} min   ", end='', flush=True)
         vals[j] = peak_ratio(d, N, sd)
+    all_vals[d] = vals
     std = vals.std(ddof=1) if len(vals) > 1 else 0.0
     print(chr(13) + f"delta = {d:g} s, N = {N:,}, realisations = {len(vals)}: "
           f"ratio = {vals.mean():.4f} +/- {std:.4f} (std over realisations)" + " " * 20, flush=True)
+
+# ── distribution of the final ratio over all realisations ──────────────────────
+# x = sqrt(S_alias/S_peak) from one realisation, y = number of realisations.
+RATIO_BINS = 500   # more bins = narrower bins
+for d, vals in all_vals.items():
+    if len(vals) < 2:
+        continue
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.hist(vals, bins=RATIO_BINS, color='#c1272d', alpha=0.8)
+    ax.axvline(vals.mean(), color='k', ls='--', lw=0.8, label=f'mean = {vals.mean():.4f}')
+    ax.set_xlabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
+    ax.set_ylabel('number of realisations', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N:,}$, {len(vals)} realisations', fontsize=11)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+
+plt.show()
