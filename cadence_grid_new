@@ -1,28 +1,28 @@
 """
-Jitter x N grid of Lomb-Scargle periodograms, using the AICE parameters from
-fig2_final.py (u0 = g*T - v_kick/2 = 21.27 m/s, T = 2.5 s, 70 m gradiometer, 1 kg source at
-D = 3 m with 0.5 m vertical amplitude) and a 0.05 Hz oscillator.
+Stacked jitter figures: Lomb-Scargle periodograms of a 0.04 Hz oscillator, with the
+AICE parameters from fig2_final.py (u0 = g*T - v_kick/2 = 21.27 m/s, T = 2.5 s, 70 m
+gradiometer, 1 kg source at D = 3 m with 0.5 m vertical amplitude).
 
-Cycle times T_c ~ Uniform(T_nom - delta, T_nom + delta). The jitter makes the
-sampling non-uniform, so the Lomb-Scargle estimator is valid above the
-(mean-rate) Nyquist frequency; the spectrum is evaluated out to 0.2 Hz to show
-the aliased harmonics.
+Cycle times T_c ~ Uniform(T_nom, T_nom + delta) with T_nom = 5 s: strictly positive
+jitter. The jitter makes the sampling non-uniform, so the Lomb-Scargle estimator is
+valid above the Nyquist frequency; the spectrum is evaluated out to 0.2 Hz to show the
+aliased harmonics.
 
-Rows: delta = 0, 0.15, 0.3 s (increasing jitter downward).
-Columns: N = 1,000, 10,000, 100,000 cycles (increasing N to the right).
-Figures: linear y, log y, and both again with 1e-5 rad/sqrt(Hz) shot noise.
-Also: log grids with the delta = 0 row recomputed by FFT / by a coarse-grid LS
-(signposted on the panels). Also saved: stacked_jitter_N{10000,100000}_{lin,log}.png, four delta panels
-(0, 0.1, 0.2, 0.3 s) per figure on a common y-axis, no noise, with the first
-alias (f_s - f_sig) shaded gold for delta > 0; the delta = 0 panel labels f_0,
-2f_0 and their aliases.
+One linear-y figure per N in STACK_NS (N = 100,000), saved to the Desktop at 1000 dpi as
+stacked jitter N{N} lin.png: four panels (delta = 0, 0.1, 0.2, 0.3 s) on a common
+y-axis, no noise. For delta > 0 the first alias is shaded gold over the range the jitter
+actually spans, from 1/(T_nom + delta) - f_0 to 1/T_nom - f_0; the delta = 0 panel labels
+f_0, 2f_0 and their aliases.
 
 Physics model (arm trajectories, point-mass potential, Lomb-Scargle estimator)
 reused from cadence_bragg_comparison / fig2_final.py.
 """
 
+import os
+
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 
 # ── constants (AICE params from fig2_final.py) ─────────────────────────────────
 m_atom = 1.46e-25;  hbar = 1.055e-34
@@ -34,19 +34,21 @@ dt = 0.01
 delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
 
 # source (fig2_final src_common), vertical linear oscillator
-M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
-f_sig = 0.05
+M, D_0, h_0, A = 1.0, 3.0, 20.0, 1
+f_sig = 0.04   # chosen so the f_0 and 2f_0 aliases do not coincide with other peaks
 
 T_fly = 2 * T
 N_fly = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-# fig2_final runs back-to-back cycles (T_cyc = T_fly = 5 s). With jitter a
-# cycle shorter than the flight would overlap the previous one, so the nominal
-# cycle is lengthened: T_c >= T_fly holds for every jitter used.
-DELTAS = [0.0, 0.15, 0.3]
-Ns     = [1_000, 10_000, 100_000]
-T_nom  = 5.5   # >= T_fly + max(DELTAS) = 5.3 s
+# fig2_final runs back-to-back cycles (T_cyc = T_fly = 5 s). The jitter is
+# strictly positive, T_c in [T_nom, T_nom + delta], so a cycle is never shorter
+# than the flight (T_nom = T_fly) and cycles never overlap.
+T_nom  = 5.0   # shortest cycle [s] = T_fly
+
+def T_mean(delta):
+    """Mean cycle time for jitter width delta."""
+    return T_nom + delta / 2
 
 # ── trajectory helpers ─────────────────────────────────────────────────────────
 def atom_path(z0, u, t0, t1, floor):
@@ -113,13 +115,20 @@ def ls_psd(t, y, freqs, batch=200):
         S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
     return S
 
-def freq_grid(f_lo, f_hi, t_meas, f_centers, n_coarse=4000, zoom_cycles=30, n_fine=300):
+def freq_grid(f_lo, f_hi, t_meas, f_centers, n_coarse=4000, zoom_cycles=30, n_fine=300,
+              f_bands=(), band_oversample=2):
     """Coarse grid over [f_lo, f_hi] plus finely-oversampled windows around
     each frequency in f_centers (peak linewidth is ~1/T_span, which a fixed
-    coarse grid undersamples at large N)."""
+    coarse grid undersamples at large N). f_bands: (lo, hi) ranges, e.g. the
+    jitter-smeared aliases, sampled at band_oversample points per 1/T_span."""
+    T_span     = t_meas[-1] - t_meas[0]
     coarse     = np.linspace(f_lo, f_hi, n_coarse)
-    half_width = zoom_cycles / (t_meas[-1] - t_meas[0])
+    half_width = zoom_cycles / T_span
     pieces     = [coarse]
+    for lo, hi in f_bands:
+        lo, hi = max(f_lo, lo), min(f_hi, hi)
+        if hi > lo:
+            pieces.append(np.linspace(lo, hi, int(np.ceil(band_oversample * (hi - lo) * T_span)) + 2))
     for fc in f_centers:
         if f_lo <= fc <= f_hi:
             pieces.append(np.linspace(max(f_lo, fc - half_width),
@@ -129,166 +138,59 @@ def freq_grid(f_lo, f_hi, t_meas, f_centers, n_coarse=4000, zoom_cycles=30, n_fi
 # ── cadence ────────────────────────────────────────────────────────────────────
 def random_cadence(delta, N_cycles, seed=0):
     rng = np.random.default_rng(seed)
-    T_cycles = rng.uniform(T_nom - delta, T_nom + delta, N_cycles)
+    T_cycles = rng.uniform(T_nom, T_nom + delta, N_cycles)
     return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
 
 # ── frequency range and zoom targets ───────────────────────────────────────────
 F_LO, F_HI = 1e-3, 0.2
-f_s = 1.0 / T_nom   # mean sampling rate
+f_s = 1.0 / T_nom   # sampling rate of the uniform (delta = 0) case
 
-# harmonics k*f_sig and their aliases |k*f_sig - m*f_s| inside [F_LO, F_HI]
-ZOOM_CENTERS = sorted({
-    round(abs(k * f_sig - m * f_s), 9)
-    for k in range(1, 6) for m in range(-3, 4)
-    if F_LO <= abs(k * f_sig - m * f_s) <= F_HI
-})
+def f_s_of(delta):
+    """Mean sampling rate for jitter width delta."""
+    return 1.0 / T_mean(delta)
 
-# ── noise ──────────────────────────────────────────────────────────────────────
-# white phase noise, ASD [rad/sqrt(Hz)]; the shot-to-shot sigma at the nominal
-# cadence is ASD / sqrt(T_nom). Both levels scale one shared unit-normal draw,
-# so they sit on the same noise realisation.
-NOISE_LEVELS = [
-    dict(asd=1e-5, color='#a3d9a3', lw=0.35, zorder=3),   # fig2_final level, light green
-    dict(asd=1e-4, color='#2e7d32', lw=0.35, zorder=2),   # higher level, darker green
-]
-NOISE_BASE = NOISE_LEVELS[0]['asd']
-noise_rng  = np.random.default_rng(1)
+def zoom_centers(delta):
+    """Harmonics k*f_sig and their aliases |k*f_sig - m*f_s| inside [F_LO, F_HI]."""
+    fs = f_s_of(delta)
+    return sorted({
+        round(abs(k * f_sig - m * fs), 9)
+        for k in range(1, 6) for m in range(-3, 4)
+        if F_LO <= abs(k * f_sig - m * fs) <= F_HI
+    })
 
-def noise_label(asd):
-    return f'shot noise ({asd:.0e})'.replace('e-0', 'e-')
+ALIAS_ORDERS = 2    # first alias of f_0 and of 2f_0 get a finely sampled band
 
-# ── spectra for every (delta, N) ───────────────────────────────────────────────
-grid_spectra = {}   # (d, n) -> (f_grid, S_clean, {asd: S_noisy})
-for d in DELTAS:
-    for n in Ns:
-        print(f"delta = {d:g} s, N = {n:,} ...", flush=True)
-        t_m = random_cadence(d, n)
-        f_g = freq_grid(F_LO, F_HI, t_m, f_centers=ZOOM_CENTERS,
-                        n_coarse=4000 if n <= 10_000 else 40000)
-        y = phases_for(t_m - T_fly)
-        unit_noise = noise_rng.normal(0.0, 1.0, size=len(y)) / np.sqrt(T_nom)
-        S_noisy = {lvl['asd']: ls_psd(t_m, y + lvl['asd'] * unit_noise, f_g)
-                   for lvl in NOISE_LEVELS}
-        grid_spectra[(d, n)] = (f_g, ls_psd(t_m, y, f_g), S_noisy)
+def alias_bands(delta):
+    """Frequency ranges the k-th harmonic's first alias sweeps as T_c runs over
+    [T_nom, T_nom + delta]: |k*f_0 - 1/T_c|, i.e. 1/(T_nom+delta) - k*f_0 to 1/T_nom - k*f_0."""
+    if delta == 0:
+        return []
+    bands = []
+    for k in range(1, ALIAS_ORDERS + 1):
+        a, b = abs(k * f_sig - 1 / (T_nom + delta)), abs(k * f_sig - 1 / T_nom)
+        bands.append((min(a, b), max(a, b)))
+    return bands
+
+grid_spectra = {}   # (delta, N) -> (f_grid, S, {}), filled by get_spectrum
 
 # ── plot style (follows the main figure of fig2_final.py) ─────────────────────
 COLORS = dict(
     fundamental = '#c1272d',   # red -- oscillator spectrum
 )
-f_N     = 0.5 / T_nom          # Nyquist frequency of the mean cadence
 Y_LABEL = r'$\sqrt{S_k}$ [$\mu$rad/$\sqrt{\mathrm{Hz}}$]'
 X_LABEL = '$f$ [Hz]'
 
-# one shared y-range for every panel (rad -> urad)
-_peak_urad = max(np.sqrt(S).max() for _, S, _ in grid_spectra.values()) * 1e6
-Y_MIN_LOG, Y_MAX_LOG = 0.1 * NOISE_BASE * 1e6, 3 * _peak_urad
-
-def plot_jitter_N_grid(log_y, noise_asds=(), override=None, flag=None):
-    """noise_asds: ASDs (keys of NOISE_LEVELS) whose noisy periodograms to overlay.
-    override: {n: (f, S)} replacing the delta = 0 spectra (a method check);
-    flag: text signposted on every overridden panel."""
-    levels = [lvl for lvl in NOISE_LEVELS if lvl['asd'] in noise_asds]
-    figg, axg = plt.subplots(3, 3, figsize=(12, 9.5), dpi=200,
-                             sharex=True, sharey=log_y)   # linear: per-panel y
-    for r, d in enumerate(DELTAS):
-        for c, n in enumerate(Ns):
-            ax = axg[r, c]
-            f_g, S, S_noisy = grid_spectra[(d, n)]
-            overridden = override is not None and d == 0.0
-            if overridden:
-                f_g, S = override[n]
-                S_noisy = {}
-            for lvl in ([] if overridden else levels):
-                ax.plot(f_g, np.sqrt(S_noisy[lvl['asd']]) * 1e6, color=lvl['color'],
-                        lw=lvl['lw'], zorder=lvl['zorder'])
-            ax.plot(f_g, np.sqrt(S) * 1e6, color=COLORS['fundamental'],
-                    lw=0.8, zorder=4)
-            ax.axvline(f_N, color='k', ls='--', lw=0.5, alpha=0.6)
-            ax.tick_params(labelsize=11)
-            # units inside mathtext so "s" matches the delta and N (not bold)
-            n_tex = f'{n:,}'.replace(',', '{,}')
-            pm = r'\pm' if d else ''
-            ax.set_title(rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$,  $N = {n_tex}$', fontsize=11)
-            if overridden:
-                ax.text(0.03, 0.95, flag, transform=ax.transAxes, fontsize=9, fontweight='bold',
-                        ha='left', va='top', color='#1f4e9c', zorder=6,
-                        bbox=dict(boxstyle='round,pad=0.25', fc='white', ec='#1f4e9c', lw=1.0))
-    if log_y:
-        axg[0, 0].set_yscale('log')
-        axg[0, 0].set_ylim(Y_MIN_LOG, Y_MAX_LOG)
-        f_N_y = Y_MAX_LOG * 0.5
-    else:
-        for r in range(3):
-            for c in range(3):
-                axg[r, c].set_ylim(0, 1.1 * np.sqrt(grid_spectra[(DELTAS[r], Ns[c])][1]).max() * 1e6)
-        f_N_y = axg[0, 0].get_ylim()[1] * 0.5
-    axg[0, 0].set_xlim(F_LO, F_HI)
-    axg[0, 0].text(f_N, f_N_y, r'  $f_N$', fontsize=9, ha='left', va='center')
-    if levels:
-        axg[0, 0].legend(handles=[plt.Line2D([], [], color=lvl['color'], lw=1.5,
-                                              label=noise_label(lvl['asd'])) for lvl in levels],
-                         fontsize=8, loc='upper right', frameon=False)
-    for ax in axg.flat:
-        ax.tick_params(labelleft=True)
-    axg[1, 0].set_ylabel(Y_LABEL, fontsize=12)
-    axg[-1, 1].set_xlabel(X_LABEL, fontsize=12)
-    figg.tight_layout()
-    return figg
-
-fig1 = plot_jitter_N_grid(log_y=False)
-fig2 = plot_jitter_N_grid(log_y=True)
-fig3 = plot_jitter_N_grid(log_y=False, noise_asds=(1e-5,))
-fig4 = plot_jitter_N_grid(log_y=True,  noise_asds=(1e-5,))
-fig5 = plot_jitter_N_grid(log_y=True,  noise_asds=(1e-5, 1e-4))   # both noise levels
-
-# ── delta = 0 method checks on the log grid: FFT, and a coarse-grid LS ─────────
-# Uniform sampling (delta = 0) is the one case where a plain FFT is valid. With
-# the Scargle normalisation S = dt*(C²/CC + S²/SS)/2 and CC = SS = N/2, LS at a
-# Fourier frequency equals dt*|X_k|²/N. The DFT is periodic in f_s, so it is
-# tiled past the Nyquist frequency to cover the same 0-0.2 Hz range.
-COARSE_PTS = 4000     # coarse LS grid: uniform points over [F_LO, F_HI], no zoom windows
-
-def fft_spectrum(n):
-    t_m = random_cadence(0.0, n)
-    y = phases_for(t_m - T_fly)
-    X = np.fft.fft(y - y.mean())
-    S1 = T_nom * np.abs(X)**2 / n                 # one period, 0 <= f < f_s
-    f1 = np.arange(n) / (n * T_nom)
-    f_all = np.concatenate([f1, f1 + f_s])
-    S_all = np.concatenate([S1, S1])
-    keep = (f_all >= F_LO) & (f_all <= F_HI)
-    return f_all[keep], S_all[keep]
-
-def coarse_ls_spectrum(n):
-    t_m = random_cadence(0.0, n)
-    f_c = np.linspace(F_LO, F_HI, COARSE_PTS)
-    return f_c, ls_psd(t_m, phases_for(t_m - T_fly), f_c)
-
-fft_spectra    = {n: fft_spectrum(n) for n in Ns}
-coarse_spectra = {n: coarse_ls_spectrum(n) for n in Ns}
-for n in Ns:        # FFT vs LS at the main peak, as a normalisation check
-    f_f, S_f = fft_spectra[n]
-    f_l, S_l, _ = grid_spectra[(0.0, n)]
-    print(f"delta = 0, N = {n:,}: peak sqrt(S) FFT {np.sqrt(S_f).max()*1e6:.4g} vs LS "
-          f"{np.sqrt(S_l).max()*1e6:.4g} urad/sqrt(Hz)", flush=True)
-
-fig6 = plot_jitter_N_grid(log_y=True, override=fft_spectra,
-                          flag='delta = 0 row: FFT (not LS)')
-fig7 = plot_jitter_N_grid(log_y=True, override=coarse_spectra,
-                          flag=f'delta = 0 row: coarse-grid LS ({COARSE_PTS} pts)')
-
 # ── stacked jitter figures: delta = 0, 0.1, 0.2, 0.3 s, one N per figure ───────
 STACK_DELTAS = [0.0, 0.1, 0.2, 0.3]
-STACK_NS     = [10_000, 100_000]
-F_ALIAS      = f_s - f_sig        # first alias of the oscillator, ~0.132 Hz
-ALIAS_PER_S  = 0.05               # alias-band half-width per second of jitter [Hz/s]
+STACK_NS     = [100_000]
+FIG_SIZE     = (3.4, 9.0)   # [in] one column wide and tall, for a two-column paper
 
 def get_spectrum(d, n):
     """Clean LS spectrum for (delta, N), reusing the grid above when available."""
     if (d, n) not in grid_spectra:
         print(f"stacked: delta = {d:g} s, N = {n:,} ...", flush=True)
         t_m = random_cadence(d, n)
-        f_g = freq_grid(F_LO, F_HI, t_m, f_centers=ZOOM_CENTERS,
+        f_g = freq_grid(F_LO, F_HI, t_m, f_centers=zoom_centers(d), f_bands=alias_bands(d),
                         n_coarse=4000 if n <= 10_000 else 40000)
         grid_spectra[(d, n)] = (f_g, ls_psd(t_m, phases_for(t_m - T_fly), f_g), {})
     f_g, S, _ = grid_spectra[(d, n)]
@@ -297,43 +199,52 @@ def get_spectrum(d, n):
 def plot_stacked(n, log_y):
     spectra = [get_spectrum(d, n) for d in STACK_DELTAS]
     ymax = max(sp.max() for _, sp in spectra)
-    fig, axs = plt.subplots(len(STACK_DELTAS), 1, figsize=(6.5, 8.5), dpi=200,
+    y_exp = int(np.floor(np.log10(1.25 * ymax)))      # power of ten shown once, top left
+    fig, axs = plt.subplots(len(STACK_DELTAS), 1, figsize=FIG_SIZE, dpi=200,
                             sharex=True, sharey=True)
     for ax, d, (f_g, sp) in zip(axs, STACK_DELTAS, spectra):
         ax.plot(f_g, sp, color=COLORS['fundamental'], lw=0.8, zorder=4)
         if d:                                     # delta = 0: the alias is a sharp line, no band
-            half = ALIAS_PER_S * d                    # jitter smears the alias line
-            ax.axvspan(F_ALIAS - half, F_ALIAS + half, color='gold', alpha=0.3, lw=0, zorder=0)
-        pm = r'\pm' if d else ''
-        ax.text(0.98, 0.9, rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$', transform=ax.transAxes,
-                fontsize=11, ha='right', va='top')
-        ax.tick_params(labelsize=11)
+            # the first alias sits at 1/T_c - f_0 for each cycle time T_c in [T_nom, T_nom + d]
+            ax.axvspan(1 / (T_nom + d) - f_sig, 1 / T_nom - f_sig, color='gold', alpha=0.3, lw=0, zorder=0)
+        pm = ''   # one-sided jitter: T_c in [T_nom, T_nom + delta]
+        ax.text(0.5, 0.9, rf'$\delta = {pm}{d:g}\,\mathrm{{s}}$', transform=ax.transAxes,
+                fontsize=8, ha='center', va='top')
+        ax.tick_params(labelsize=8, right=True)   # y ticks on both sides; none on top
+        if not log_y:                             # short tick labels (zero shown as 0) with one shared 10^n
+            ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: '0' if v == 0 else f'{v / 10**y_exp:g}'))
     if log_y:
         axs[0].set_yscale('log')
         axs[0].set_ylim(STACK_LOG_FLOOR, 3 * ymax)
     else:
         axs[0].set_ylim(0, 1.25 * ymax)
     axs[0].set_xlim(F_LO, F_HI)
+    axs[0].set_xticks([0.05, 0.1, 0.15, 0.2])
+    if not log_y:
+        axs[0].text(0.012, 0.97, rf'$\times 10^{{{y_exp}}}$', transform=axs[0].transAxes, fontsize=8, ha='left', va='top')   # inside the top panel
 
     # delta = 0 (top panel): label the main peak, the 2f_0 peak and both aliases
     f_top, sp_top = spectra[0]
     for f_t, label, off, ha in [(f_sig,           r'$f_0$',        (-3, 6), 'right'),
                                 (2 * f_sig,       r'$2f_0$',       (0, 6),  'center'),
                                 (f_s - 2 * f_sig, r'$2f_0$ (alias)', (0, 6), 'center'),
-                                (f_s - f_sig,     r'$f_0$ (alias)', (4, 6), 'left')]:
+                                (f_s - f_sig,     r'$f_0$ (alias)', (-4, 6), 'right')]:
         near = np.abs(f_top - f_t) < 0.002
         y_t = sp_top[near].max()
         axs[0].scatter([f_top[near][sp_top[near].argmax()]], [y_t], color=COLORS['fundamental'],
                        s=7, zorder=5)
         axs[0].annotate(label, (f_t, y_t), textcoords='offset points', xytext=off,
-                        ha=ha, fontsize=9, color=COLORS['fundamental'])
-    axs[-1].set_xlabel(X_LABEL, fontsize=12)
-    fig.supylabel(Y_LABEL, fontsize=12)
-    fig.tight_layout()
-    fig.savefig(f"stacked_jitter_N{n}_{'log' if log_y else 'lin'}.png", bbox_inches='tight')
+                        ha=ha, fontsize=7, color=COLORS['fundamental'])
+    axs[-1].set_xlabel(X_LABEL, fontsize=9)
+    fig.supylabel(Y_LABEL, fontsize=9, x=0.02)
+    fig.subplots_adjust(left=0.17, right=0.955, top=0.985, bottom=0.06, hspace=0.1)
+    out_path = os.path.join(os.path.expanduser('~'), 'Desktop',
+                            f"stacked jitter N{n} {'log' if log_y else 'lin'}.png")
+    fig.savefig(out_path, dpi=1000)   # dpi only; figure size is exactly FIG_SIZE
+    print(f"saved {out_path}", flush=True)
     return fig
 
 STACK_LOG_FLOOR = 0.1     # [urad/sqrt(Hz)]; clips only the deepest window nulls
-stack_figs = [plot_stacked(n, log_y) for n in STACK_NS for log_y in (False, True)]
+stack_figs = [plot_stacked(n, log_y=False) for n in STACK_NS]   # linear y only
 
 plt.show()
