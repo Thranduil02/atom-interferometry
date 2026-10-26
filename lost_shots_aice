@@ -34,7 +34,7 @@ m_atom = 1.46e-25;  hbar = 1.055e-34
 v_kick = 1000 * hbar * (2*np.pi / 698e-9) / m_atom
 G = 6.67e-11;  g = 9.81;  M = 1;  h_0 = 1;  D_0 = 3;  A = 0.5
 f_sig = 0.02
-u0 = 24.5;  dt = 0.01;  T = 2.5
+dt = 0.01;  T = 2.5;  u0 = g*T - v_kick/2   # launch speed [m/s]: lower arm lands at t = T_fly (u0 = g*T - v_kick/2)
 T_fly = 2*T;  N_fly = int(round(T_fly/dt));  t_local = np.arange(N_fly)*dt
 
 f_uldm = 0.05;  hbar_eV = 6.582119569e-16

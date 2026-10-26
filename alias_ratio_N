@@ -24,8 +24,8 @@ N_REALISATIONS = 5000                # jitter draws to average over
 m_atom = 1.46e-25;  hbar = 1.055e-34
 v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
 G = 6.67e-11; g = 9.81
-u0 = 24.5          # launch speed [m/s]
 T = 2.5            # half-interferometer time [s]
+u0 = g * T - v_kick / 2   # launch speed [m/s]: lower arm lands at t = T_fly (u0 = g*T - v_kick/2)
 dt = 0.01
 delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
 
@@ -186,8 +186,15 @@ for d, vals in all_vals.items():
     if len(vals) < 2:
         continue
     fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
-    ax.hist(vals, bins=RATIO_BINS, color='#c1272d', alpha=0.8)
-    ax.axvline(vals.mean(), color='k', ls='--', lw=0.8, label=f'mean = {vals.mean():.4f}')
+    counts, edges, _ = ax.hist(vals, bins=RATIO_BINS, color='#c1272d', alpha=0.8)
+    # Gaussian fit by maximum likelihood (mean, std of the realisations), drawn as the
+    # expected number of realisations per bin; independent of the bin width
+    mu, sig = vals.mean(), vals.std(ddof=1)
+    x = np.linspace(vals.min() - 3 * sig, vals.max() + 3 * sig, 600)
+    ax.plot(x, len(vals) * (edges[1] - edges[0]) * np.exp(-(x - mu)**2 / (2 * sig**2)) / (sig * np.sqrt(2 * np.pi)),
+            color='k', lw=1.2, label=rf'Gaussian fit: $\mu = {mu:.4f}$, $\sigma = {sig:.4f}$')
+    print(f"delta = {d:g} s: Gaussian fit to ratio distribution: mu = {mu:.4f}, sigma = {sig:.4f}")
+    ax.axvline(mu, color='k', ls='--', lw=0.8)
     ax.set_xlabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
     ax.set_ylabel('number of realisations', fontsize=12)
     ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N:,}$, {len(vals)} realisations', fontsize=11)

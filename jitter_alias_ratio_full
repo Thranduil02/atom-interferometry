@@ -1,0 +1,317 @@
+"""
+Alias-to-main-peak height ratio sqrt(S_alias/S_peak) with strictly positive cycle-time
+jitter: the cycle time is T_c ~ Uniform(T_nom, T_nom + delta) with T_nom = 5 s, so the
+mean cycle is T_nom + delta/2 and the oscillator's alias sits at
+f_alias = 1/(T_nom + delta/2) - f_sig.
+
+Two parts, one script (physics and estimator as in cadence_alias_ratio / alias_ratio_N,
+AICE parameters of fig2_final.py, 0.05 Hz vertical oscillator, Lomb-Scargle, no noise):
+
+  1. Sweep over N (N_MIN ... N_MAX in steps of N_STEP, plus N_MAX itself), for
+     delta = DELTAS, averaged over `realisations_sweep` jitter draws per point.
+     The mean ratio is fitted to a + b/sqrt(N) for each jittered delta (fit
+     errors printed). The ratio-vs-N figure is drawn twice: once with the shaded band
+     mean +/- 1 std, once with the band min/max over the draws. Then a and b vs delta.
+
+  2. A single N = N_SINGLE (= N_MAX) with `realisations_single_N` draws per delta:
+     mean +/- std of the ratio printed; for each jittered delta, the jitter of every
+     cycle in the first realisation (scatter and histogram), and the histogram of
+     the ratio over all realisations with a Gaussian fit.
+
+delta = 0 is uniform sampling (a single realisation, ratio ~1).
+"""
+
+import time
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ── parameters to set ──────────────────────────────────────────────────────────
+T_nom  = 5.0                           # shortest cycle time [s]; T_c ~ Uniform(T_nom, T_nom + delta)
+DELTAS = [0.0, 0.1, 0.2, 0.3]          # jitter widths [s] (same as cadence_alias_ratio)
+
+# part 1: sweep over N
+N_MIN, N_MAX, N_STEP = 1000, 10000, 100
+Ns = list(range(N_MIN, N_MAX + 1, N_STEP))             # 1000, 2000, ..., N_MAX
+realisations_sweep = 20                # jitter draws per (delta, N) in the sweep
+
+# part 2: one N, many realisations
+N_SINGLE              = N_MAX          # highest N of the sweep
+realisations_single_N = 5000           # jitter draws per delta at N_SINGLE
+RATIO_BINS            = 100            # bins of the ratio histogram
+
+# ── constants (AICE params from fig2_final.py) ─────────────────────────────────
+m_atom = 1.46e-25;  hbar = 1.055e-34
+v_kick = 1000 * hbar * 2*np.pi / (698e-9 * m_atom)
+G = 6.67e-11; g = 9.81
+T = 2.5            # half-interferometer time [s]
+u0 = g * T - v_kick / 2   # launch speed [m/s]: lower arm lands at t = T_fly (u0 = g*T - v_kick/2)
+dt = 0.01
+delta_r = 70.0     # gradiometer baseline: IFO2 sits 70 m above IFO1
+
+# source (fig2_final src_common), vertical linear oscillator
+M, D_0, h_0, A = 1.0, 3.0, 1.0, 0.5
+f_sig = 0.05
+
+T_fly = 2 * T
+N_fly = int(round(T_fly / dt))
+t_local = np.arange(N_fly) * dt
+assert T_nom >= T_fly, "cycle time must be at least the flight time"
+
+OVERSAMPLE = 2                 # coarse grid: grid points per native resolution element 1/T_span
+MIN_COARSE = 300               # floor on coarse-grid points per window
+MAIN_HALF  = 0.002             # [Hz] window half-width around f_sig
+ALIAS_HALF = 0.010             # [Hz] window half-width around the alias
+
+def alias_freq(delta):
+    """First alias of the oscillator at the mean sampling rate 1/(T_nom + delta/2)."""
+    return 1.0 / (T_nom + delta / 2) - f_sig
+
+# ── trajectory helpers ─────────────────────────────────────────────────────────
+def atom_path(z0, u, t0, t1, floor):
+    z, v, zs = z0, u, []
+    for _ in np.arange(t0, t1, dt):
+        z += v*dt - 0.5*g*dt**2;  v -= g*dt
+        if z <= floor and v < 0:  z = floor;  v = 0;  break
+        zs.append(z)
+    return np.array(zs), v
+
+def arm_positions(z0, floor, upper=False):
+    k1 = v_kick if upper else 0.0
+    p1, v1 = atom_path(z0, u0 + k1, 0, T, floor)
+    k2 = -v_kick if upper else v_kick
+    p2, _  = atom_path(p1[-1] if len(p1) else float(floor),
+                        v1 + k2, T, T_fly, floor)
+    path = np.concatenate([p1, p2])
+    if len(path) < N_fly:
+        path = np.concatenate([path, np.full(N_fly - len(path), float(floor))])
+    return path[:N_fly]
+
+def V(z, h):
+    return -G * M / np.sqrt(D_0**2 + (z - h)**2)
+
+lower1_loc = arm_positions(0, 0, upper=False)
+upper1_loc = arm_positions(0, 0, upper=True)
+lower2_loc = arm_positions(delta_r, delta_r, upper=False)
+upper2_loc = arm_positions(delta_r, delta_r, upper=True)
+
+def phases_for(t_starts, chunk=10_000):
+    out = np.empty(len(t_starts))
+    for i0 in range(0, len(t_starts), chunk):
+        t_abs = t_starts[i0:i0 + chunk, None] + t_local[None, :]
+        h = h_0 + A * np.cos(2*np.pi * f_sig * t_abs)
+        pd1 = V(upper1_loc, h) - V(lower1_loc, h)
+        pd2 = V(upper2_loc, h) - V(lower2_loc, h)
+        out[i0:i0 + chunk] = (m_atom / hbar) * np.trapezoid(pd1 - pd2, t_local, axis=1)
+    return out
+
+def ls_psd(t, y, freqs, max_elems=4_000_000):
+    """Scargle (1982) LS PSD; S(f) = dt_eff*(C²/CC + S²/SS)/2.
+    Only cos(wt) and sin(wt) are evaluated; the tau shift (a = w*tau) is applied
+    afterwards by rotating the sums Σc², Σs², Σcs, Σcy, Σsy. Frequencies are
+    processed in batches sized so each (batch x len(t)) array stays ~max_elems."""
+    y = y - y.mean()
+    dt_eff = (t[-1] - t[0]) / (len(t) - 1)
+    batch = max(1, max_elems // len(t))
+    S = np.empty_like(freqs)
+    for i0 in range(0, len(freqs), batch):
+        f_b = freqs[i0:i0 + batch]
+        wt = np.outer(2 * np.pi * f_b, t)
+        c = np.cos(wt);  s = np.sin(wt)
+        Scc = np.einsum('ij,ij->i', c, c)
+        Sss = np.einsum('ij,ij->i', s, s)
+        Scs = np.einsum('ij,ij->i', c, s)
+        Yc = c @ y;  Ys = s @ y
+        a = 0.5 * np.arctan2(2 * Scs, Scc - Sss)          # w*tau
+        ca = np.cos(a);  sa = np.sin(a)
+        C = ca * Yc + sa * Ys
+        Sn = ca * Ys - sa * Yc
+        CC = ca**2 * Scc + sa**2 * Sss + 2 * ca * sa * Scs
+        SS = ca**2 * Sss + sa**2 * Scc - 2 * ca * sa * Scs
+        S[i0:i0 + batch] = dt_eff * 0.5 * (C**2 / CC + Sn**2 / SS)
+    return S
+
+def window_grid(f_c, half, t_meas, zoom_cycles=30, n_fine=300):
+    """Coarse grid over [f_c - half, f_c + half] plus a fine zoom on f_c (the
+    unsmeared line is only ~1/T_span wide). The coarse point count scales with
+    T_span, so the oversampling relative to the native resolution 1/T_span is
+    OVERSAMPLE at every N."""
+    T_span = t_meas[-1] - t_meas[0]
+    n_coarse = max(MIN_COARSE, int(np.ceil(OVERSAMPLE * 2 * half * T_span)))
+    half_zoom = zoom_cycles / T_span
+    return np.unique(np.concatenate([
+        np.linspace(f_c - half, f_c + half, n_coarse),
+        np.linspace(f_c - half_zoom, f_c + half_zoom, n_fine),
+    ]))
+
+def cycle_times(delta, N_cycles, seed=0):
+    """Cycle times T_c ~ Uniform(T_nom, T_nom + delta): strictly positive jitter."""
+    return np.random.default_rng(seed).uniform(T_nom, T_nom + delta, N_cycles)
+
+def random_cadence(delta, N_cycles, seed=0):
+    T_cycles = cycle_times(delta, N_cycles, seed)
+    return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
+
+def peak_ratio(delta, n, seed):
+    t_m = random_cadence(delta, n, seed=seed)
+    y = phases_for(t_m - T_fly)
+    f_main  = window_grid(f_sig,              MAIN_HALF,  t_m)
+    f_ali   = window_grid(alias_freq(delta),  ALIAS_HALF, t_m)
+    main  = np.sqrt(ls_psd(t_m, y, f_main)).max()
+    alias = np.sqrt(ls_psd(t_m, y, f_ali)).max()
+    return alias / main
+
+# ── progress bar, weighted by evaluation cost (~N^2) so the ETA is meaningful ──────
+def seeds_sweep(d):
+    return [0] if d == 0 else list(range(realisations_sweep))
+
+def seeds_single(d):
+    return [0] if d == 0 else list(range(realisations_single_N))
+
+total_work = (sum(len(seeds_sweep(d)) * n**2 for d in DELTAS for n in Ns)
+              + sum(len(seeds_single(d)) * N_SINGLE**2 for d in DELTAS))
+done_work, t_start = 0.0, time.time()
+
+def show_progress(label):
+    frac = done_work / total_work
+    el = time.time() - t_start
+    eta = el * (1 - frac) / frac if frac > 0 else float('nan')
+    bar = '#' * int(30 * frac) + '-' * (30 - int(30 * frac))
+    print(chr(13) + f"[{bar}] {100*frac:5.1f}%  elapsed {el/60:7.1f} min  ETA {eta/60:7.1f} min  {label}   ",
+          end='', flush=True)
+
+# ══ part 1: ratio vs N ═════════════════════════════════════════════════════════════
+stats = {}   # delta -> dict(mean, std_lo, std_hi, min, max), each an array over Ns
+for d in DELTAS:
+    seeds = seeds_sweep(d)
+    per_seed = np.empty((len(Ns), len(seeds)))
+    for i, n in enumerate(Ns):
+        for j, sd in enumerate(seeds):
+            show_progress(f"sweep  delta={d:g}  N={n:,}  draw {j+1}/{len(seeds)}")
+            per_seed[i, j] = peak_ratio(d, n, sd)
+            done_work += n**2
+    mean = per_seed.mean(1)
+    sd_  = per_seed.std(1, ddof=1) if per_seed.shape[1] > 1 else np.zeros(len(Ns))
+    stats[d] = dict(mean=mean,
+                    std_lo=np.maximum(mean - sd_, 0.0), std_hi=mean + sd_,
+                    min=per_seed.min(1), max=per_seed.max(1))
+    print(f"\ndelta = {d:g} s: mean ratio {mean[0]:.3f} (N={Ns[0]:,}) -> "
+          f"{mean[-1]:.3f} (N={Ns[-1]:,})", flush=True)
+
+# ── fit the jittered curves to a + b/sqrt(N) (linear least squares in 1/sqrt(N)) ──
+Ns_arr = np.array(Ns, dtype=float)
+fits, fit_errs = {}, {}     # delta -> (a, b), (sigma_a, sigma_b) from the LS covariance
+for d in DELTAS:
+    if d == 0:
+        continue
+    (b, a), cov = np.polyfit(1 / np.sqrt(Ns_arr), stats[d]['mean'], 1, cov=True)
+    da, db = np.sqrt(cov[1, 1]), np.sqrt(cov[0, 0])
+    fits[d], fit_errs[d] = (a, b), (da, db)
+    print(f"delta = {d:g} s fit: a = {a:.4f} +/- {da:.4f}, b = {b:.3f} +/- {db:.3f}  (ratio = a + b/sqrt(N))")
+
+# ══ part 2: one N, many realisations ═══════════════════════════════════════════════
+all_vals = {}   # delta -> ratio from each realisation at N_SINGLE
+for d in DELTAS:
+    seeds = seeds_single(d)
+    vals = np.empty(len(seeds))
+    for j, sd in enumerate(seeds):
+        show_progress(f"N={N_SINGLE:,}  delta={d:g}  draw {j+1}/{len(seeds)}")
+        vals[j] = peak_ratio(d, N_SINGLE, sd)
+        done_work += N_SINGLE**2
+    all_vals[d] = vals
+    std = vals.std(ddof=1) if len(vals) > 1 else 0.0
+    print(chr(13) + f"delta = {d:g} s, N = {N_SINGLE:,}, realisations = {len(vals)}: "
+          f"ratio = {vals.mean():.4f} +/- {std:.4f} (std over realisations)" + " " * 40, flush=True)
+show_progress("done");  print()
+
+# ══ plots (style of fig2_final.py) ═════════════════════════════════════════════════
+# delta = 0 in the fig2_final red; the jittered deltas are spread along viridis,
+# so any list of DELTAS gets distinct colours
+jit = [d for d in DELTAS if d]
+CURVE_COLORS = {d: plt.cm.viridis(0.05 + 0.85 * i / max(len(jit) - 1, 1)) for i, d in enumerate(jit)}
+CURVE_COLORS[0.0] = '#c1272d'
+
+def plot_ratio_vs_N(band):
+    """band = 'std' (mean +/- 1 std over the draws) or 'minmax' (min to max over the draws)."""
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    tops = []
+    for d in DELTAS:
+        lo, hi = (stats[d]['std_lo'], stats[d]['std_hi']) if band == 'std' else (stats[d]['min'], stats[d]['max'])
+        ax.fill_between(Ns, lo, hi, color=CURVE_COLORS[d], alpha=0.2, lw=0)
+        ax.plot(Ns, stats[d]['mean'], '-', color=CURVE_COLORS[d], lw=1.2,
+                label=rf"$\delta = {d:g}\,\mathrm{{s}}$")
+        tops.append(hi.max())
+    for d, (a, b) in fits.items():
+        ax.plot(Ns_arr, a + b / np.sqrt(Ns_arr), '--', color=CURVE_COLORS[d], lw=1.0, zorder=5)
+    ax.plot([], [], 'k--', lw=1.0, label=r'fit $a + b/\sqrt{N}$')
+    ax.set_xlim(Ns[0], Ns[-1])
+    ax.set_ylim(0, 1.1 * max(tops))
+    ax.set_xlabel('$N$', fontsize=12)
+    ax.set_ylabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
+    ax.set_title('band: mean $\\pm$ 1 std' if band == 'std' else 'band: min to max over draws', fontsize=9)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=8, loc='best', frameon=False)
+    fig.tight_layout()
+
+plot_ratio_vs_N('std')
+plot_ratio_vs_N('minmax')
+
+# fit parameters vs delta (error bars: 1 sigma from the fit covariance)
+fit_deltas = np.array(list(fits))
+for idx, ylabel in enumerate([r'$a$', r'$b$']):
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.errorbar(fit_deltas, [fits[d][idx] for d in fit_deltas], yerr=[fit_errs[d][idx] for d in fit_deltas],
+                fmt='o-', color='#1f4e9c', lw=1.2, ms=4, capsize=3)
+    ax.set_xlabel(r'$\delta\,[\mathrm{s}]$', fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
+# jitter of every cycle in the first realisation at N_SINGLE
+for d in jit:
+    jitter = cycle_times(d, N_SINGLE, seed=0) - T_nom          # in [0, delta]
+    print(f"delta = {d:g} s, N = {N_SINGLE:,}: jitter mean = {jitter.mean():.4f} s "
+          f"(uniform expectation {d/2:.4f}), std = {jitter.std():.4f} s "
+          f"(expectation {d/np.sqrt(12):.4f}), range = [{jitter.min():.4f}, {jitter.max():.4f}] s")
+
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    ax.scatter(np.arange(1, N_SINGLE + 1), jitter, s=1.5, color='#c1272d', alpha=0.6, lw=0, rasterized=True)
+    ax.set_xlim(0, N_SINGLE);  ax.set_ylim(-0.05 * d, 1.05 * d)
+    ax.set_xlabel('cycle number', fontsize=12)
+    ax.set_ylabel(r'jitter $T_c - T_{\mathrm{nom}}$ [s]', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N_SINGLE:,}$', fontsize=11)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    counts, edges, _ = ax.hist(jitter, bins=40, range=(0, d), color='#c1272d', alpha=0.8)
+    exp_count = N_SINGLE * (edges[1] - edges[0]) / d          # uniform expectation per bin
+    ax.plot([0, 0, d, d], [0, exp_count, exp_count, 0], '--', color='k', lw=0.8)
+    ax.set_xlabel(r'jitter $T_c - T_{\mathrm{nom}}$ [s]', fontsize=12)
+    ax.set_ylabel('number of cycles', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N_SINGLE:,}$', fontsize=11)
+    ax.tick_params(labelsize=11)
+    fig.tight_layout()
+
+# distribution of the final ratio over all realisations, with a Gaussian fit
+for d, vals in all_vals.items():
+    if len(vals) < 2:
+        continue
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=200)
+    counts, edges, _ = ax.hist(vals, bins=RATIO_BINS, color='#c1272d', alpha=0.8)
+    # Gaussian fit by maximum likelihood (mean, std of the realisations), drawn as the
+    # expected number of realisations per bin; independent of the bin width
+    mu, sig = vals.mean(), vals.std(ddof=1)
+    x = np.linspace(vals.min() - 3 * sig, vals.max() + 3 * sig, 600)
+    ax.plot(x, len(vals) * (edges[1] - edges[0]) * np.exp(-(x - mu)**2 / (2 * sig**2)) / (sig * np.sqrt(2 * np.pi)),
+            color='k', lw=1.2, label=rf'Gaussian fit: $\mu = {mu:.4f}$, $\sigma = {sig:.4f}$')
+    print(f"delta = {d:g} s: Gaussian fit to ratio distribution: mu = {mu:.4f}, sigma = {sig:.4f}")
+    ax.axvline(mu, color='k', ls='--', lw=0.8)
+    ax.set_xlabel(r'$\sqrt{S_{\mathrm{alias}}/S_{\mathrm{peak}}}$', fontsize=12)
+    ax.set_ylabel('number of realisations', fontsize=12)
+    ax.set_title(rf'$\delta = {d:g}\,\mathrm{{s}}$, $N = {N_SINGLE:,}$, {len(vals)} realisations', fontsize=11)
+    ax.tick_params(labelsize=11)
+    ax.legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+
+plt.show()

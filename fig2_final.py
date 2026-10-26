@@ -63,16 +63,18 @@ m_atom  = 1.46e-25;  hbar = 1.055e-34
 G       = 6.67e-11;  g    = 9.81
 n       = 1000
 v_kick  = n * hbar * (2 * np.pi / 698e-9) / m_atom
-u0      = 24.5        # launch speed [m/s]
 T       = 2.5         # half-interferometry time [s]
 T_fly   = 2 * T
+# launch speed [m/s]: chosen so the lower arm lands back on the ground exactly at the end
+# of the sequence (net upward shift of the pulses is v_kick*T, so u0 = g*T_fly/2 - v_kick/2)
+u0      = g * T_fly / 2 - v_kick / 2
 T_cyc   = 5.0          # cycle time [s]
 dt      = 0.01
 
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 3e7   # total observation time [s]
+T_total  = 1000   # total observation time [s]
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
@@ -230,6 +232,25 @@ def harmonic_table(label, src, f_k, S_urad, n_max=4):
     return rows
 
 if __name__ == "__main__":
+    # ── one interferometer cycle: arm paths of both gradiometer ends ────────────
+    # Shown immediately (non-blocking) so it doesn't wait for the long simulation below.
+    fig_paths, axs_p = plt.subplots(2, 1, figsize=(6, 6), dpi=200, sharex=True)
+    for ax_p, (name, lo, up) in zip(axs_p[::-1], (('IFO 1 (z = 0)', lower1, upper1),
+                                                  (f'IFO 2 (z = {delta_r:g} m)', lower2, upper2))):
+        ax_p.plot(t_local, lo, color='k', lw=1.2, label='lower arm')
+        ax_p.plot(t_local, up, color=COLORS['fundamental'], lw=1.2, label='upper arm')
+        for t_pulse in (0.0, T, T_fly):
+            ax_p.axvline(t_pulse, color='k', ls=':', lw=0.5, alpha=0.5)
+        ax_p.set_ylabel('height $z$ [m]', fontsize=12)
+        ax_p.set_title(name, fontsize=9, fontweight='bold')
+        ax_p.tick_params(labelsize=11)
+        ax_p.legend(fontsize=8, loc='lower center', frameon=False)
+    axs_p[-1].set_xlabel('time within one cycle [s]', fontsize=12)
+    axs_p[-1].set_xlim(0, T_fly)
+    fig_paths.tight_layout()
+    plt.show(block=False)
+    plt.pause(0.1)
+
     uldm = uldm_phase_vec(t_meas, f_phi, m_phi)
 
     print(f"Panel (a): traj_linear f0={F_SLOW:.4f} Hz + ULDM ({N_cycles:,} cycles)...")

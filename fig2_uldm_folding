@@ -44,8 +44,8 @@ m_atom  = 1.46e-25;  hbar = 1.055e-34
 G       = 6.67e-11;  g    = 9.81
 n       = 1000
 v_kick  = n * hbar * (2 * np.pi / 698e-9) / m_atom
-u0      = 24.5        # launch speed [m/s]
 T       = 2.5         # half-interferometry time [s]
+u0      = g * T - v_kick / 2   # launch speed [m/s]: lower arm lands at t = T_fly (u0 = g*T - v_kick/2)
 T_fly   = 2 * T
 T_cyc   = 5.0          # cycle time [s]
 dt      = 0.01
