@@ -31,13 +31,13 @@ T_nom  = 5.0                           # shortest cycle time [s]; T_c ~ Uniform(
 DELTAS = [0.0, 0.1, 0.2, 0.3]          # jitter widths [s] (same as cadence_alias_ratio)
 
 # part 1: sweep over N
-N_MIN, N_MAX, N_STEP = 1000, 10000, 100
+N_MIN, N_MAX, N_STEP = 1000, 100000, 100
 Ns = list(range(N_MIN, N_MAX + 1, N_STEP))             # 1000, 2000, ..., N_MAX
 realisations_sweep = 20                # jitter draws per (delta, N) in the sweep
 
 # part 2: one N, many realisations
 N_SINGLE              = N_MAX          # highest N of the sweep
-realisations_single_N = 5000           # jitter draws per delta at N_SINGLE
+realisations_single_N = 100          # jitter draws per delta at N_SINGLE
 RATIO_BINS            = 100            # bins of the ratio histogram
 
 # ── constants (AICE params from fig2_final.py) ─────────────────────────────────

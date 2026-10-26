@@ -3,9 +3,9 @@ Alias-to-main-peak height ratio vs N (5,000 to 100,000), for
 random cycle-time jitter delta = 0, 0.1, 0.2, 0.3 s.
 
 Same setup as cadence_grid_new (fig2_final AICE parameters, 0.05 Hz vertical
-oscillator, T_c ~ Uniform(T_nom - delta, T_nom + delta), Lomb-Scargle, no
-noise). The oscillator at f_sig = 0.05 Hz is sampled at the mean rate
-f_s = 1/T_nom, so it has an alias at f_s - f_sig. With uniform sampling
+oscillator, T_c ~ Uniform(T_nom, T_nom + delta) with T_nom = 5 s: strictly positive
+jitter, Lomb-Scargle, no noise). The oscillator at f_sig = 0.05 Hz is sampled at the
+mean rate 1/(T_nom + delta/2), so it has an alias at 1/(T_nom + delta/2) - f_sig. With uniform sampling
 (delta = 0) the alias is as tall as the main peak (ratio 1); jitter smears it,
 so its height relative to the main peak falls as N grows.
 
@@ -40,11 +40,13 @@ T_fly = 2 * T
 N_fly = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_nom = 5.5                    # nominal cycle; >= T_fly + max jitter
-f_s   = 1.0 / T_nom
-f_alias = f_s - f_sig          # first alias of the oscillator
+T_nom = 5.0                    # shortest cycle [s] = T_fly; T_c ~ Uniform(T_nom, T_nom + delta)
 
-DELTAS  = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+def alias_freq(delta):
+    """First alias of the oscillator at the mean sampling rate 1/(T_nom + delta/2)."""
+    return 1.0 / (T_nom + delta / 2) - f_sig
+
+DELTAS  = [0.0, 0.1, 0.2, 0.3]
 N_STEP  = 1000
 Ns      = list(range(1_000, int(10000), N_STEP))
 N_SEEDS = 20
@@ -131,14 +133,14 @@ def window_grid(f_c, half, t_meas, zoom_cycles=30, n_fine=300):
 
 def random_cadence(delta, N_cycles, seed=0):
     rng = np.random.default_rng(seed)
-    T_cycles = rng.uniform(T_nom - delta, T_nom + delta, N_cycles)
+    T_cycles = rng.uniform(T_nom, T_nom + delta, N_cycles)
     return np.concatenate([[0.0], np.cumsum(T_cycles[:-1])]) + T_fly
 
 def peak_ratio(delta, n, seed):
     t_m = random_cadence(delta, n, seed=seed)
     y = phases_for(t_m - T_fly)
     f_main  = window_grid(f_sig,   MAIN_HALF,  t_m)
-    f_ali   = window_grid(f_alias, ALIAS_HALF, t_m)
+    f_ali   = window_grid(alias_freq(delta), ALIAS_HALF, t_m)
     main  = np.sqrt(ls_psd(t_m, y, f_main)).max()
     alias = np.sqrt(ls_psd(t_m, y, f_ali)).max()
     return alias / main
