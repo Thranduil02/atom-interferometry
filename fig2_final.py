@@ -55,6 +55,8 @@ annotation helpers are all copied verbatim from fig2_circle_summary.py /
 fig2_multi_directional.py / fig2_noise_levels.py.
 """
 
+import time
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -74,7 +76,7 @@ dt      = 0.01
 N_fly   = int(round(T_fly / dt))
 t_local = np.arange(N_fly) * dt
 
-T_total  = 1000   # total observation time [s]
+T_total  = 1e6   # total observation time [s]
 N_cycles = int(T_total / T_cyc)
 f_N      = 1.0 / (2 * T_cyc)   # Nyquist frequency = 0.1 Hz
 
@@ -178,7 +180,35 @@ def traj_inclined_circle(t_abs, p):
     h = p['h0'] + p['amp'] * np.sin(alpha) * np.sin(ph)
     return h, np.sqrt(x*x + w*w)
 
+# ── single progress bar for the whole program (an estimate) ────────────────────
+# Work units are cycles: one compute_phases pass = N_cycles (dominant cost), each
+# noise + periodogram = PERIODOGRAM_WORK * N_cycles, the final plotting/summary = N_cycles.
+# log() prints a message above the bar and redraws it.
+PERIODOGRAM_WORK = 0.05
+N_PHASE_CALLS    = 4 + (len(THETA_DEG) - 1)     # a, b, c, vertical circle + sweep (theta = 0 reused)
+N_PERIODOGRAMS   = 7 + (len(THETA_DEG) - 1)     # a, b, c, fig 2 (x2), fig 3 (x2) + sweep
+total_work = (N_PHASE_CALLS + PERIODOGRAM_WORK * N_PERIODOGRAMS + 1) * N_cycles
+done_work, t_start, _last_bar = 0.0, time.time(), ''
+
+def show_progress(label):
+    global _last_bar
+    frac = min(done_work / total_work, 1.0)
+    el = time.time() - t_start
+    eta = el * (1 - frac) / frac if frac > 0 else float('nan')
+    bar = '#' * int(30 * frac) + '-' * (30 - int(30 * frac))
+    _last_bar = chr(13) + f"[{bar}] {100*frac:5.1f}%  elapsed {el/60:7.1f} min  ETA {eta/60:7.1f} min  {label}   "
+    print(_last_bar, end='', flush=True)
+
+def log(*args, **kwargs):
+    """print() that keeps the progress bar on the last line."""
+    if _last_bar:
+        print(chr(13) + ' ' * 110 + chr(13), end='')
+    print(*args, **kwargs, flush=True)
+    if _last_bar:
+        print(_last_bar, end='', flush=True)
+
 def compute_phases(src, chunk=25_000):
+    global done_work
     phases = np.empty(N_cycles)
     for start in range(0, N_cycles, chunk):
         end   = min(start + chunk, N_cycles)
@@ -187,14 +217,17 @@ def compute_phases(src, chunk=25_000):
         dphi  = ((V(upper1, h_osc, src['M'], D_osc) - V(lower1, h_osc, src['M'], D_osc))
                - (V(upper2, h_osc, src['M'], D_osc) - V(lower2, h_osc, src['M'], D_osc)))
         phases[start:end] = (m_atom / hbar) * np.trapezoid(dphi, t_local, axis=1)
-        if end == N_cycles or (end // chunk) % 20 == 0:
-            print(f"    cycles {end:,}/{N_cycles:,} done", flush=True)
+        done_work += end - start
+        show_progress(f"phases: {src['name']}")
     return phases
 
 def add_noise(phases, shot_noise_asd):
     return phases + np.random.normal(0.0, shot_noise_asd / np.sqrt(T_cyc), size=N_cycles)
 
 def periodogram(ph):
+    global done_work
+    done_work += PERIODOGRAM_WORK * N_cycles
+    show_progress('spectra')
     f_k  = np.fft.rfftfreq(N_cycles, d=T_cyc)
     S_k  = (T_cyc / N_cycles) * np.abs(np.fft.rfft(ph - ph.mean()))**2
     mask = f_k > 0
@@ -217,17 +250,17 @@ src_c_vert = dict(name='c_vert', f=F_CIRC, traj=traj_inclined_circle, incline_de
 def harmonic_table(label, src, f_k, S_urad, n_max=4):
     """Same format as fig2_circle_summary.py's harmonic_table() (no
     sideband splitting needed here -- no pendulum in this figure)."""
-    print(f"\nPanel ({label}): source f0 = {src['f']:.4f} Hz, M={src['M']}, "
+    log(f"\nPanel ({label}): source f0 = {src['f']:.4f} Hz, M={src['M']}, "
           f"amp={src['amp']}, D={src['D']}, h0={src['h0']} "
           f"[{src['traj'].__name__}, incline={src.get('incline_deg', 'n/a')}]")
-    print(f"  {'n':>2}  {'n*f0 [Hz]':>10}  {'folded [Hz]':>12}  {'peak [urad/rtHz]':>18}  status")
+    log(f"  {'n':>2}  {'n*f0 [Hz]':>10}  {'folded [Hz]':>12}  {'peak [urad/rtHz]':>18}  status")
     rows = []
     for k in range(1, n_max + 1):
         f_true = k * src['f']
         f_fold = fold_frequency(f_true, f_N)
         f_bin, peak = peak_at(f_k, S_urad, f_fold)
         status = 'genuine (< f_N)' if f_true <= f_N else 'folded/aliased'
-        print(f"  {k:>2}  {f_true:>10.4f}  {f_fold:>12.4f}  {peak:>18.4g}  {status}")
+        log(f"  {k:>2}  {f_true:>10.4f}  {f_fold:>12.4f}  {peak:>18.4g}  {status}")
         rows.append((k, f_true, f_fold, peak, f_bin))
     return rows
 
@@ -253,19 +286,19 @@ if __name__ == "__main__":
 
     uldm = uldm_phase_vec(t_meas, f_phi, m_phi)
 
-    print(f"Panel (a): traj_linear f0={F_SLOW:.4f} Hz + ULDM ({N_cycles:,} cycles)...")
+    log(f"Panel (a): traj_linear f0={F_SLOW:.4f} Hz + ULDM ({N_cycles:,} cycles)...")
     raw_a = compute_phases(src_a) + uldm
 
-    print(f"Panel (b): traj_linear f0={F_CIRC:.4f} Hz (folds) + ULDM "
+    log(f"Panel (b): traj_linear f0={F_CIRC:.4f} Hz (folds) + ULDM "
           f"({N_cycles:,} cycles)...")
     raw_b = compute_phases(src_b) + uldm
 
-    print(f"Panel (c): horizontal circle f0={F_CIRC:.4f} Hz (folds) + ULDM "
+    log(f"Panel (c): horizontal circle f0={F_CIRC:.4f} Hz (folds) + ULDM "
           f"({N_cycles:,} cycles)...")
     phases_c = compute_phases(src_c)
     raw_c = phases_c + uldm
 
-    print(f"Figure 2: vertical circle f0={F_CIRC:.4f} Hz (folds), no ULDM "
+    log(f"Figure 2: vertical circle f0={F_CIRC:.4f} Hz (folds), no ULDM "
           f"({N_cycles:,} cycles)...")
     phases_c_vert = compute_phases(src_c_vert)
 
@@ -285,10 +318,10 @@ if __name__ == "__main__":
     rows['c'] = harmonic_table('c', src_c, f_k, urad['c'])
 
     f_phi_bins = {k: peak_at(f_k, u, f_phi) for k, u in urad.items()}
-    print(f"\nULDM peak at f_phi = {f_phi} Hz, per panel:")
+    log(f"\nULDM peak at f_phi = {f_phi} Hz, per panel:")
     for k in 'abc':
-        print(f"  ({k})  {f_phi_bins[k][1]:>12.4g} urad/rtHz")
-    print(f"\nShot-noise floor = {NOISE_LEVELS[0]['asd']*1e6:.4g} urad/rtHz")
+        log(f"  ({k})  {f_phi_bins[k][1]:>12.4g} urad/rtHz")
+    log(f"\nShot-noise floor = {NOISE_LEVELS[0]['asd']*1e6:.4g} urad/rtHz")
 
     # ── theta sweep for panel (d): 2f0/f0 ratio vs. circle inclination ──────────
     # theta = 0 is exactly src_c (already computed above) -- reuse it rather
@@ -302,7 +335,7 @@ if __name__ == "__main__":
         else:
             src_th = dict(name=f'theta{th:g}', f=F_CIRC, traj=traj_inclined_circle,
                           incline_deg=th, **src_common)
-            print(f"Panel (d) sweep: incline={th:g} deg "
+            log(f"Panel (d) sweep: incline={th:g} deg "
                   f"({N_cycles:,} cycles)...")
             raw_th = compute_phases(src_th) + uldm
             _, S_th = periodogram(add_noise(raw_th, NOISE_LEVELS[0]['asd']))
@@ -313,10 +346,10 @@ if __name__ == "__main__":
         peak_2f0_theta[th] = f2_peak
         ratio_2f0_f0[th]   = f2_peak / f0_peak
 
-    print(f"\n2f0/f0 folded-peak ratio vs. circle inclination "
+    log(f"\n2f0/f0 folded-peak ratio vs. circle inclination "
           f"(0 deg = horizontal, 90 deg = vertical, full 0-360 deg sweep):")
     for th in THETA_DEG:
-        print(f"  theta={th:>5.1f} deg   f0={peak_f0_theta[th]:>12.4g}   "
+        log(f"  theta={th:>5.1f} deg   f0={peak_f0_theta[th]:>12.4g}   "
               f"2f0={peak_2f0_theta[th]:>12.4g}   ratio={ratio_2f0_f0[th]:.4f}")
 
     # ── plot: 3 stacked periodogram panels (a,b,c) + 1 line graph (d) ───────────
@@ -555,20 +588,21 @@ if __name__ == "__main__":
     ax_d3.axvline(270, color='k', ls=':', lw=0.4, alpha=0.5)
     ax_d3.axhline(ratio_2f0_f0[90.0], color='k', ls=':', lw=0.4, alpha=0.5)
 
-    print("\n" + "=" * 78)
-    print("Suggested caption:")
-    print(f"  dt = T_cyc = {T_cyc:g} s, N_cycles = {N_cycles:,}, T_obs = {T_total:.3g} s, "
+    log("\n" + "=" * 78)
+    log("Suggested caption:")
+    log(f"  dt = T_cyc = {T_cyc:g} s, N_cycles = {N_cycles:,}, T_obs = {T_total:.3g} s, "
           f"f_N = {f_N:g} Hz, shot noise = {NOISE_LEVELS[0]['asd']:.0e} rad/sqrt(Hz) in all panels.")
-    print(f"  ULDM: f_phi = {f_phi} Hz, m_phi = {m_phi:.4g} eV (present in every panel).")
-    print(f"  Source: M = {src_common['M']}, amp = {src_common['amp']} m, "
+    log(f"  ULDM: f_phi = {f_phi} Hz, m_phi = {m_phi:.4g} eV (present in every panel).")
+    log(f"  Source: M = {src_common['M']}, amp = {src_common['amp']} m, "
           f"D = {src_common['D']} m, h0 = {src_common['h0']} m.")
-    print(f"  (a) 1D oscillator + ULDM, f0 = {F_SLOW} Hz (sub-Nyquist: nonlinearity comb, no folding).")
-    print(f"  (b) 1D oscillator + ULDM, f0 = {F_CIRC} Hz (super-Nyquist: comb folds).")
-    print(f"  (c) horizontal circle + ULDM, f0 = {F_CIRC} Hz (super-Nyquist: comb folds).")
-    print(f"  (d) 2f0/f0 folded-peak ratio for a circle inclined at 0-360 deg (every 10 deg) "
+    log(f"  (a) 1D oscillator + ULDM, f0 = {F_SLOW} Hz (sub-Nyquist: nonlinearity comb, no folding).")
+    log(f"  (b) 1D oscillator + ULDM, f0 = {F_CIRC} Hz (super-Nyquist: comb folds).")
+    log(f"  (c) horizontal circle + ULDM, f0 = {F_CIRC} Hz (super-Nyquist: comb folds).")
+    log(f"  (d) 2f0/f0 folded-peak ratio for a circle inclined at 0-360 deg (every 10 deg) "
           f"out of the horizontal.")
-    print(f"  Figure 3: as figure 1, but panel (c) overlays the horizontal and vertical "
+    log(f"  Figure 3: as figure 1, but panel (c) overlays the horizontal and vertical "
           f"circle combs (+ ULDM) instead of showing the horizontal circle alone.")
-    print("=" * 78)
+    log("=" * 78)
 
+    done_work = total_work;  show_progress('done');  print()
     plt.show()
