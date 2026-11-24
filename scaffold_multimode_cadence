@@ -25,7 +25,7 @@ from scipy.integrate import quad
 from scipy.interpolate import RectBivariateSpline, interp1d
 
 # ── Cadences ──────────────────────────────────────────────────────────────────
-N_CYC         = 5000                     # measurements per cadence
+N_CYC         = int(100000)                  # measurements per cadence
 T_nom         = 2.0                      # nominal cycle time [s]
 JITTER_DELTAS = [0.0, 0.1, 0.2, 0.5]     # T_c ~ U(T_nom, T_nom + delta) [s]
 STACK_PAIRS   = [(2.0, 2.5), (2.0, 3.0)] # alternating cycle times (T_A, T_B) [s]
@@ -212,11 +212,31 @@ cadences = ([dict(kind='jitter', par=d, t_launch=random_cadence(d, N_CYC)) for d
             + [dict(kind='alt', par=p, t_launch=alternating_cadence(*p, N_CYC)) for p in STACK_PAIRS])
 assert min(np.diff(c['t_launch']).min() for c in cadences) >= 2 * T, "cycles would overlap"
 
-# ── Progress bar with ETA (whole program) ─────────────────────────────────────
+# ── Potential grid axes, and the stored grid if it matches ────────────────────
+# The grid is saved to SCAFFOLD_DATA after it is computed and reused on later runs,
+# as long as its z/alpha axes and member amplitudes are the same as here.
+SCAFFOLD_DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scaffold data.npz')
+
 n_zgrid    = 30
 n_alpha    = 12
+z_min_phys = 0.0
+z_max_phys = max(upper1.max(), upper2.max()) + 0.5
+z_grid     = np.linspace(z_min_phys, z_max_phys, n_zgrid)
+alpha_grid = np.linspace(-alpha_max, alpha_max, n_alpha)
+
+V_grid = None
+if os.path.exists(SCAFFOLD_DATA):
+    with np.load(SCAFFOLD_DATA) as data:      # 'with' closes the file again
+        if all(data[k].shape == v.shape and np.allclose(data[k], v)
+               for k, v in (('z_grid', z_grid), ('alpha_grid', alpha_grid), ('amplitudes', amplitudes))):
+            V_grid = data['V_grid']
+            print(f"\nLoaded potential grid from {SCAFFOLD_DATA}")
+        else:
+            print(f"\n{SCAFFOLD_DATA} is for a different grid; recomputing")
+
+# ── Progress bar with ETA (whole program) ─────────────────────────────────────
 GRID_WORK  = 20.0   # one potential-grid point costs about this many quad measurements
-total_work = n_alpha * n_zgrid * GRID_WORK + len(cadences) * N_CYC
+total_work = (V_grid is None) * n_alpha * n_zgrid * GRID_WORK + len(cadences) * N_CYC
 done_work, t_start = 0.0, time.time()
 
 def show_progress(label):
@@ -228,24 +248,23 @@ def show_progress(label):
           end='', flush=True)
 
 # ── Potential grid ────────────────────────────────────────────────────────────
-z_min_phys = 0.0
-z_max_phys = max(upper1.max(), upper2.max()) + 0.5
-z_grid     = np.linspace(z_min_phys, z_max_phys, n_zgrid)
-alpha_grid = np.linspace(-alpha_max, alpha_max, n_alpha)
-
 print(f"\nModes:")
 for m in modes:
     print(f"  f={m['f']} Hz, scale={m['scale']}, phase={m['phase']:.2f} rad")
 print(f"alpha range: [{-alpha_max:.2f}, {alpha_max:.2f}]")
-print(f"\nPrecomputing potential grid ({n_alpha} x {n_zgrid} = {n_alpha*n_zgrid} points,"
-      f" {len(members)} members each) ...")
 
-V_grid = np.zeros((n_alpha, n_zgrid))
-for i, alpha in enumerate(alpha_grid):
-    for j, zj in enumerate(z_grid):
-        V_grid[i, j] = scaffold_potential_mode(x, y, zj, alpha, members, amplitudes)
-        done_work += GRID_WORK
-        show_progress(f'potential grid row {i+1}/{n_alpha}')
+if V_grid is None:
+    print(f"\nPrecomputing potential grid ({n_alpha} x {n_zgrid} = {n_alpha*n_zgrid} points,"
+          f" {len(members)} members each) ...")
+    V_grid = np.zeros((n_alpha, n_zgrid))
+    for i, alpha in enumerate(alpha_grid):
+        for j, zj in enumerate(z_grid):
+            V_grid[i, j] = scaffold_potential_mode(x, y, zj, alpha, members, amplitudes)
+            done_work += GRID_WORK
+            show_progress(f'potential grid row {i+1}/{n_alpha}')
+    np.savez(SCAFFOLD_DATA, V_grid=V_grid, z_grid=z_grid,
+             alpha_grid=alpha_grid, amplitudes=amplitudes)
+    print(f"\nSaved potential grid to {SCAFFOLD_DATA}")
 
 V_interp = RectBivariateSpline(alpha_grid, z_grid, V_grid)
 
