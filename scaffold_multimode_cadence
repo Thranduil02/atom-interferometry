@@ -7,12 +7,13 @@ scaffold_multimode; only the launch times change:
   - random jitter:  cycle time T_c ~ Uniform(T_nom, T_nom + delta), T_nom = 2 s,
                     delta in JITTER_DELTAS (delta = 0 is the uniform cadence);
   - structured:     cycle times alternating T_A, T_B, ... for (T_A, T_B) in STACK_PAIRS.
-A ULDM tone (f_phi = 0.05 Hz) and stretch noise (1e-5) are added as in
-scaffold_multimode. The sampling is non-uniform, so the spectra are Lomb-Scargle
-(ls_psd from cadence_grid_new) instead of the FFT.
+The data stream is the scaffold GGN phase plus a ULDM tone (f_phi = 0.05 Hz) plus
+stretch noise (1e-5), as in scaffold_multimode. The sampling is non-uniform, so the spectra are Lomb-Scargle (ls_psd from
+cadence_grid_new) instead of the FFT.
 
-Figures: the jitter cadences stacked, and the structured cadences stacked; each
-panel shows the noisy periodogram with the scaffold (GGN) and ULDM periodograms on top.
+Figures: the jitter cadences stacked, and the structured cadences stacked, each
+saved with a linear and a log y-axis; every panel is the one periodogram of the
+GGN + ULDM data stream.
 """
 
 import os
@@ -25,10 +26,10 @@ from scipy.integrate import quad
 from scipy.interpolate import RectBivariateSpline, interp1d
 
 # ── Cadences ──────────────────────────────────────────────────────────────────
-N_CYC         = int(100000)                  # measurements per cadence
+N_CYC         = int(10000)                  # measurements per cadence
 T_nom         = 2.0                      # nominal cycle time [s]
-JITTER_DELTAS = [0.0, 0.1, 0.2, 0.5]     # T_c ~ U(T_nom, T_nom + delta) [s]
-STACK_PAIRS   = [(2.0, 2.5), (2.0, 3.0)] # alternating cycle times (T_A, T_B) [s]
+JITTER_DELTAS = [0.0, 0.1, 0.5]     # T_c ~ U(T_nom, T_nom + delta) [s]
+STACK_PAIRS   = [(2.0, 2.5), (2.0, 2.7)] # alternating cycle times (T_A, T_B) [s]
 F_LO, F_HI    = 1e-3, 1 / T_nom          # periodogram range [Hz]
 SEED          = 0
 
@@ -350,9 +351,9 @@ def add_noise(ph, shot_noise_asd, delta_t, rng):
     return ph + rng.normal(0.0, shot_noise_asd / np.sqrt(delta_t), size=len(ph))
 
 # ── Noise floor (stretch level, as in scaffold_multimode) ─────────────────────
-NOISE = dict(asd=1e-5, label='stretch (1e-5)', color='#1b5e20', lw=0.5)
+NOISE_ASD = 1e-5   # [rad/sqrt(Hz)]
 
-# ── Run every cadence ─────────────────────────────────────────────────────────
+# ── Run every cadence: one data stream = scaffold GGN + ULDM + stretch noise ──
 rng = np.random.default_rng(SEED)
 for c in cadences:
     name = (f"delta = {c['par']:g} s" if c['kind'] == 'jitter'
@@ -360,63 +361,60 @@ for c in cadences:
     c['name']   = name
     t_meas      = c['t_launch'] + 2*T
     phase_raw   = phase_differences(c['t_launch'], f'phases: {name}')
-    uldm        = uldm_phase_vec(t_meas, f_phi, m_phi)
     T_mean      = np.diff(t_meas).mean()
+    data        = add_noise(phase_raw + uldm_phase_vec(t_meas, f_phi, m_phi), NOISE_ASD, T_mean, rng)
     f_k         = np.linspace(F_LO, F_HI, int(4 * (F_HI - F_LO) * (t_meas[-1] - t_meas[0])))   # 4 points per 1/T_span
-    c['f_k']        = f_k
-    c['f_N']        = 0.5 / T_mean
-    c['urad_raw']   = np.sqrt(ls_psd(t_meas, phase_raw, f_k)) * 1e6
-    c['urad_uldm']  = np.sqrt(ls_psd(t_meas, uldm, f_k)) * 1e6
-    c['urad_noise'] = np.sqrt(ls_psd(t_meas, add_noise(phase_raw + uldm, NOISE['asd'], T_mean, rng), f_k)) * 1e6
+    c['f_k']    = f_k
+    c['f_N']    = 0.5 / T_mean
+    c['urad']   = np.sqrt(ls_psd(t_meas, data, f_k)) * 1e6
 done_work = total_work;  show_progress('done');  print()
 
 for c in cadences:
     i_phi = np.argmin(np.abs(c['f_k'] - f_phi))
-    print(f"  {c['name']:>16}: max GGN {c['urad_raw'].max():.4g}, ULDM at f_phi "
-          f"{c['urad_uldm'][i_phi]:.4g}, median noisy {np.median(c['urad_noise']):.4g}  urad/rtHz")
+    print(f"  {c['name']:>16}: max {c['urad'].max():.4g}, at f_phi {c['urad'][i_phi]:.4g}, "
+          f"median {np.median(c['urad']):.4g}  urad/rtHz")
 
 # ── Plotting (scaffold_multimode style) ───────────────────────────────────────
-COLORS = dict(
-    uldm        = '#1f4e9c',   # blue  -- f_phi (ULDM signal), always
-    fundamental = '#c1272d',   # red   -- scaffold vibration modes, always
-)
+DATA_COLOR = '#c1272d'
 AXIS_LABEL_FONTSIZE = 20
-GGN_LW  = 2.2
-ULDM_LW = 2.2
+DATA_LW = 1.2
 
-def plot_panel(ax, c, y_min, y_max):
-    ax.plot(c['f_k'], c['urad_noise'], color=NOISE['color'], lw=NOISE['lw'], zorder=3)
-    ax.plot(c['f_k'], c['urad_raw'], color=COLORS['fundamental'], lw=GGN_LW, zorder=4)
-    ax.plot(c['f_k'], c['urad_uldm'], color=COLORS['uldm'], lw=ULDM_LW, zorder=4)
-    ax.set_yscale('log')
+def plot_panel(ax, c, y_min, y_max, log):
+    ax.plot(c['f_k'], c['urad'], color=DATA_COLOR, lw=DATA_LW, zorder=3)
+    if log:
+        ax.set_yscale('log')
     ax.set_xlim(0, F_HI)
     ax.set_ylim(y_min, y_max)
+    y_mid = y_max * 0.5 if log else 0.5 * (y_min + y_max)
     ax.axvline(c['f_N'], color='k', ls='--', lw=0.5, alpha=0.6)
-    ax.text(c['f_N'], y_max * 0.5, r'  $f_N$', fontsize=8, ha='left', va='center')
-    ax.text(0.02, 0.95, c['name'], transform=ax.transAxes, fontsize=14, ha='left', va='top')
+    ax.text(c['f_N'], y_mid, r'  $f_N$', fontsize=8, ha='left', va='center')
+    ax.axvline(f_phi, color='k', ls=':', lw=0.5, alpha=0.6)
+    ax.text(f_phi, y_mid, r'  $f_\phi$', fontsize=8, ha='left', va='center')
+    ax.text(0.98, 0.95, c['name'], transform=ax.transAxes, fontsize=14, ha='right', va='top')
 
-def stacked_figure(cs, out_name):
-    y_min = 0.1 * NOISE['asd'] * 1e6
-    y_max = 3 * max(max(c['urad_raw'].max(), c['urad_uldm'].max(), c['urad_noise'].max()) for c in cs)
+def stacked_figure(cs, out_name, log):
+    top = max(c['urad'].max() for c in cs)
+    if log:
+        floor = min(np.percentile(c['urad'][c['urad'] > 0], 1) for c in cs)
+        y_min, y_max = 0.3 * floor, 3 * top
+    else:
+        y_min, y_max = 0.0, 1.1 * top
     fig, axs = plt.subplots(len(cs), 1, figsize=(10, 5 * len(cs)), sharex=True, tight_layout=True)
     for ax, c in zip(axs, cs):
-        plot_panel(ax, c, y_min, y_max)
+        plot_panel(ax, c, y_min, y_max, log)
         ax.set_ylabel(r'$\sqrt{S}$ [µrad / $\sqrt{\rm Hz}$]', fontsize=AXIS_LABEL_FONTSIZE)
     axs[-1].set_xlabel('$f$ [Hz]', fontsize=AXIS_LABEL_FONTSIZE)
-    axs[0].legend(handles=[
-        plt.Line2D([], [], color=NOISE['color'], lw=2.5, label=NOISE['label']),
-        plt.Line2D([], [], color=COLORS['fundamental'], lw=GGN_LW, label='scaffold (GGN)'),
-        plt.Line2D([], [], color=COLORS['uldm'], lw=ULDM_LW, label='ULDM tone'),
-    ], fontsize=8, loc='upper right', frameon=False)
     out = os.path.join(os.path.expanduser('~'), 'Desktop', out_name)
     fig.savefig(out, dpi=200)
     print(f"saved {out}")
     return fig
 
-fig_jitter = stacked_figure([c for c in cadences if c['kind'] == 'jitter'],
-                            'scaffold_multimode_jitter.png')
-fig_alt    = stacked_figure([c for c in cadences if c['kind'] == 'alt'],
-                            'scaffold_multimode_structured.png')
+for log in (False, True):
+    scale = 'log' if log else 'lin'
+    stacked_figure([c for c in cadences if c['kind'] == 'jitter'],
+                   f'scaffold_multimode_jitter_{scale}.png', log)
+    stacked_figure([c for c in cadences if c['kind'] == 'alt'],
+                   f'scaffold_multimode_structured_{scale}.png', log)
 
 plt.show()
 print("\nDone.")
